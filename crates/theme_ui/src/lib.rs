@@ -11,15 +11,21 @@ mod typography;
 use std::sync::OnceLock;
 
 use gpui_kit::component::{ActiveTheme as _, Theme, ThemeMode};
-use gpui_kit::{App, Global, Pixels, SharedString, Window, WindowAppearance, px};
+use gpui_kit::{App, Global, Pixels, Point, SharedString, Window, WindowAppearance, point, px};
 use settings_model::{Appearance, Preferences};
 
 pub use settings_model::DarkTheme;
 pub use tokens::AppTheme;
 pub use typography::{TypographyExt, code_line_height};
 
-/// The title bar's height in rem; overlays that sit below it use the same value.
-pub const TITLE_BAR_REMS: f32 = 2.75;
+/// The title bar's height; overlays that sit below it use the same value. Fixed rather
+/// than in rem: the traffic lights don't scale with the interface size, so a bar that
+/// did would stop lining up with them.
+pub const TITLE_BAR_HEIGHT: Pixels = px(44.);
+
+/// Where the traffic lights go, in points from the window's top-left corner. 14.5 was
+/// measured in a real window: it centers them in the [`TITLE_BAR_HEIGHT`] bar.
+pub const TRAFFIC_LIGHT_POSITION: Point<Pixels> = point(px(16.), px(14.5));
 
 impl Global for AppTheme {}
 
@@ -70,7 +76,7 @@ pub fn apply(preferences: &Preferences, window: Option<&mut Window>, cx: &mut Ap
         theme.overlay = tokens.overlay;
         theme.font_size = px(font_size);
         // Sheets open below the title bar.
-        theme.sheet.margin_top = px(font_size * TITLE_BAR_REMS);
+        theme.sheet.margin_top = TITLE_BAR_HEIGHT;
         if let Some(family) = code_family {
             theme.mono_font_family = family.into();
         }

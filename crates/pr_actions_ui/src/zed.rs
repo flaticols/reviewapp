@@ -133,14 +133,28 @@ fn with_checkout(
         .detach();
 }
 
-fn launch(result: Result<(), zed_bridge::LaunchError>, window: &mut Window, cx: &mut App) {
-    if let Err(error) = result {
-        notify_error(
-            window,
-            cx,
-            format!("{error}. Check the Zed command in Settings › Agents & editor."),
-        );
-    }
+/// Runs a Zed launch off the UI thread and reports a failure.
+fn launch(
+    run: impl FnOnce() -> Result<(), zed_bridge::LaunchError> + Send + 'static,
+    window: &mut Window,
+    cx: &mut App,
+) -> Task<bool> {
+    let task = cx.background_spawn(async move { run() });
+    window.spawn(cx, async move |cx| {
+        let result = task.await;
+        let launched = result.is_ok();
+        if let Err(error) = result {
+            cx.update(|window, cx| {
+                notify_error(
+                    window,
+                    cx,
+                    format!("{error}. Check the Zed command in Settings › Agents & editor."),
+                )
+            })
+            .ok();
+        }
+        launched
+    })
 }
 
 /// Opens `key`'s code in Zed as a project, at `path` (relative to the repository root)
@@ -155,8 +169,12 @@ pub fn open_in_zed(
     let path = path.map(str::to_string);
     with_checkout(key, window, cx, move |root, _, window, cx| {
         let zed = zed_command(cx);
-        let file = path.as_deref().map(|path| (path, line));
-        launch(zed_bridge::open_project(&zed, &root, file), window, cx);
+        launch(
+            move || zed_bridge::open_project(&zed, &root, path.as_deref().map(|p| (p, line))),
+            window,
+            cx,
+        )
+        .detach();
     });
 }
 
@@ -210,10 +228,11 @@ pub fn diff_in_zed(key: &PullRequestKey, window: &mut Window, cx: &mut App) {
                         cx,
                     ),
                     Ok((_, base_dir, head_dir)) => launch(
-                        zed_bridge::open_diff(&zed, &base_dir, &head_dir),
+                        move || zed_bridge::open_diff(&zed, &base_dir, &head_dir),
                         window,
                         cx,
-                    ),
+                    )
+                    .detach(),
                     Err(error) => notify_error(
                         window,
                         cx,
@@ -229,8 +248,9 @@ pub fn diff_in_zed(key: &PullRequestKey, window: &mut Window, cx: &mut App) {
 /// Opens commit `sha` of `key` in Zed's commit view.
 pub fn open_commit_in_zed(key: &PullRequestKey, sha: &str, window: &mut Window, cx: &mut App) {
     let sha = sha.to_string();
-    with_checkout(key, window, cx, move |root, _, _, cx| {
-        cx.open_url(&zed_bridge::commit_url(&root, &sha));
+    with_checkout(key, window, cx, move |root, _, window, cx| {
+        let url = zed_bridge::commit_url(&root, &sha);
+        launch(move || zed_bridge::open_url(&url), window, cx).detach();
     });
 }
 
@@ -250,22 +270,32 @@ pub fn ask_zed_agent(
     let key_label = format!("{}#{}", key.repo(), key.number());
     with_checkout(key, window, cx, move |root, detail, window, cx| {
         let zed = zed_command(cx);
-        if let Err(error) = zed_bridge::open_project(&zed, &root, Some((&path, Some(line)))) {
-            launch(Err(error), window, cx);
-            return;
-        }
         let prompt = format!(
             "This is about pull request {key_label}, “{}”, at {path}:{line}. The pull request is checked out at {}.\n\n{subject}\n\nRead the code around that line and suggest how to address this.",
             detail.summary.title,
             root.display(),
         );
         let url = zed_bridge::agent_prompt_url(&prompt);
-        cx.spawn(async move |cx| {
-            // The agent link goes to Zed's active window, so the project has to be open
-            // and focused first.
-            cx.background_executor().timer(ZED_SETTLE).await;
-            cx.update(|cx| cx.open_url(&url));
-        })
-        .detach();
+        let opened = launch(
+            move || zed_bridge::open_project(&zed, &root, Some((&path, Some(line)))),
+            window,
+            cx,
+        );
+        window
+            .spawn(cx, async move |cx| {
+                if !opened.await {
+                    return;
+                }
+                // The agent link goes to Zed's active window, so the project has to be
+                // open and focused first.
+                cx.background_executor().timer(ZED_SETTLE).await;
+                let task = cx
+                    .update(|window, cx| launch(move || zed_bridge::open_url(&url), window, cx))
+                    .ok();
+                if let Some(task) = task {
+                    task.await;
+                }
+            })
+            .detach();
     });
 }

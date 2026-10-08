@@ -82,6 +82,7 @@ impl Workspace {
             SwitchfoldLink::Comment { file, line } => {
                 self.comment_from_zed(&file, line, window, cx)
             }
+            SwitchfoldLink::Diff { key } => pr_actions_ui::diff_in_zed(&key, window, cx),
         }
     }
 

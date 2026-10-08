@@ -449,10 +449,7 @@ impl Workspace {
                 title_bar = title_bar.sidebar_open(open);
             }
             Route::SignIn(_) => {
-                return title_bar
-                    .without_search()
-                    .without_sidebar_toggle()
-                    .without_account();
+                return title_bar.without_sidebar_toggle().without_account();
             }
             Route::Review(view) => {
                 title_bar = title_bar

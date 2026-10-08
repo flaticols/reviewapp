@@ -20,6 +20,8 @@ pub enum SwitchfoldLink {
         file: Option<String>,
         line: Option<u32>,
     },
+    /// `diff?pr=<owner/name#n>`: show the pull request's whole diff in Zed.
+    Diff { key: PullRequestKey },
 }
 
 impl SwitchfoldLink {
@@ -39,15 +41,14 @@ impl SwitchfoldLink {
                 file: PathBuf::from(param("file")?),
                 line: line?.max(1),
             }),
-            "open" => {
-                let pr = param("pr")?;
-                let (repo, number) = pr.split_once('#')?;
-                Some(Self::Open {
-                    key: PullRequestKey::new(RepoSlug::parse(repo)?, number.parse().ok()?),
-                    file: param("file").filter(|file| !file.is_empty()),
-                    line,
-                })
-            }
+            "open" => Some(Self::Open {
+                key: parse_key(&param("pr")?)?,
+                file: param("file").filter(|file| !file.is_empty()),
+                line,
+            }),
+            "diff" => Some(Self::Diff {
+                key: parse_key(&param("pr")?)?,
+            }),
             _ => None,
         }
     }
@@ -59,11 +60,9 @@ impl SwitchfoldLink {
                 "{SCHEME}://comment?file={}&line={line}",
                 percent::encode(&file.to_string_lossy(), false)
             ),
+            Self::Diff { key } => format!("{SCHEME}://diff?pr={}", encode_key(key)),
             Self::Open { key, file, line } => {
-                let mut url = format!(
-                    "{SCHEME}://open?pr={}",
-                    percent::encode(&format!("{}#{}", key.repo(), key.number()), false)
-                );
+                let mut url = format!("{SCHEME}://open?pr={}", encode_key(key));
                 if let Some(file) = file {
                     url.push_str(&format!("&file={}", percent::encode(file, false)));
                 }
@@ -74,6 +73,18 @@ impl SwitchfoldLink {
             }
         }
     }
+}
+
+fn parse_key(pr: &str) -> Option<PullRequestKey> {
+    let (repo, number) = pr.split_once('#')?;
+    Some(PullRequestKey::new(
+        RepoSlug::parse(repo)?,
+        number.parse().ok()?,
+    ))
+}
+
+fn encode_key(key: &PullRequestKey) -> String {
+    percent::encode(&format!("{}#{}", key.repo(), key.number()), false)
 }
 
 #[cfg(test)]
@@ -99,6 +110,10 @@ mod tests {
         let url = link.to_url();
         assert!(url.starts_with("dev.switchfold.review://open?pr=flaticols%2Fswitchfold%23482"));
         assert_eq!(SwitchfoldLink::parse(&url), Some(link));
+        let diff = SwitchfoldLink::Diff {
+            key: PullRequestKey::new(RepoSlug::new("flaticols", "switchfold"), 482),
+        };
+        assert_eq!(SwitchfoldLink::parse(&diff.to_url()), Some(diff));
     }
 
     #[test]
