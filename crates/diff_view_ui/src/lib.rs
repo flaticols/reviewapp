@@ -1,0 +1,702 @@
+//! One file's diff inside the review timeline, as rows a virtualized list can render
+//! one at a time: a header with the path, counts, Viewed and Open in Zed, then hunk
+//! headers and lines in unified or split layout with syntax colors, a two-number gutter,
+//! and slots for the threads anchored to lines. Consecutive rows of a file draw as one
+//! bordered card.
+
+mod layout;
+
+use std::rc::Rc;
+
+use diff_model::{DiffLine, FileDiff, LineKind};
+use gpui_kit::assets::IconName;
+use gpui_kit::component::{
+    ActiveTheme as _, Icon, Sizable as _,
+    button::{Button, ButtonVariants as _},
+    checkbox::Checkbox,
+    h_flex,
+    menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem},
+    v_flex,
+};
+use gpui_kit::{
+    AnyElement, App, ClickEvent, ElementId, FontWeight, Hsla, InteractiveElement as _, IntoElement,
+    ParentElement as _, RenderOnce, SharedString, StatefulInteractiveElement as _, Styled as _,
+    StyledText, TestSupportExt as _, Window, div, prelude::FluentBuilder as _, rems,
+};
+use syntax_ui::FileHighlights;
+use theme_ui::{ActiveAppTheme as _, TypographyExt as _, code_line_height};
+
+pub use layout::{SplitRow, split_rows};
+
+/// Unified shows one column; split shows the base on the left and the head on the right.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DiffMode {
+    #[default]
+    Unified,
+    Split,
+}
+
+/// Files with more changed lines than this start collapsed.
+pub const COLLAPSE_THRESHOLD: usize = 100;
+
+type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+type ViewedHandler = Rc<dyn Fn(&bool, &mut Window, &mut App)>;
+type LineHandler = Rc<dyn Fn(u32, &mut Window, &mut App)>;
+type MenuBuilder = Rc<dyn Fn(PopupMenu, &mut Window, &mut App) -> PopupMenu>;
+type Spans = [(std::ops::Range<usize>, gpui_kit::HighlightStyle)];
+
+/// One row of a file's diff, by position in the file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiffRow {
+    /// Path, counts and file actions.
+    Header,
+    /// The note shown instead of a binary file's contents.
+    Binary,
+    /// A hunk's `@@` line.
+    Hunk(usize),
+    /// A line of the unified layout.
+    Line { hunk: usize, line: usize },
+    /// A row of the split layout: base-side and head-side line indices.
+    Split {
+        hunk: usize,
+        left: Option<usize>,
+        right: Option<usize>,
+    },
+    /// The threads anchored to head-side line `line`.
+    Threads(u32),
+}
+
+/// The rows `file` shows in `mode`, with a [`DiffRow::Threads`] slot after each line
+/// for which `has_threads` is true. A collapsed file shows only its header.
+pub fn diff_rows(
+    file: &FileDiff,
+    mode: DiffMode,
+    collapsed: bool,
+    has_threads: impl Fn(u32) -> bool,
+) -> Vec<DiffRow> {
+    let mut rows = vec![DiffRow::Header];
+    if collapsed {
+        return rows;
+    }
+    if file.is_binary {
+        rows.push(DiffRow::Binary);
+        return rows;
+    }
+    for (hunk_ix, hunk) in file.hunks.iter().enumerate() {
+        rows.push(DiffRow::Hunk(hunk_ix));
+        match mode {
+            DiffMode::Unified => {
+                for (line_ix, line) in hunk.lines.iter().enumerate() {
+                    rows.push(DiffRow::Line {
+                        hunk: hunk_ix,
+                        line: line_ix,
+                    });
+                    if line.kind != LineKind::Removed
+                        && let Some(number) = line.new_line
+                        && has_threads(number)
+                    {
+                        rows.push(DiffRow::Threads(number));
+                    }
+                }
+            }
+            DiffMode::Split => {
+                for split in split_rows(&hunk.lines) {
+                    rows.push(DiffRow::Split {
+                        hunk: hunk_ix,
+                        left: split.left,
+                        right: split.right,
+                    });
+                    if let Some(number) = split.right.and_then(|ix| hunk.lines[ix].new_line)
+                        && has_threads(number)
+                    {
+                        rows.push(DiffRow::Threads(number));
+                    }
+                }
+            }
+        }
+    }
+    rows
+}
+
+/// One row of a file's diff. Rows of the same file stack into a card: the header rounds
+/// the top corners and the row marked [`FileDiffRow::last`] rounds the bottom ones.
+#[derive(IntoElement)]
+pub struct FileDiffRow {
+    file: Rc<FileDiff>,
+    highlights: Rc<FileHighlights>,
+    row: DiffRow,
+    last: bool,
+    collapsed: bool,
+    viewed: bool,
+    threads: Vec<AnyElement>,
+    on_toggle_collapsed: Option<ClickHandler>,
+    on_viewed: Option<ViewedHandler>,
+    on_open_in_zed: Option<ClickHandler>,
+    on_comment_line: Option<LineHandler>,
+    menu: Option<MenuBuilder>,
+}
+
+impl FileDiffRow {
+    /// Row `row` of `file`.
+    pub fn new(file: Rc<FileDiff>, highlights: Rc<FileHighlights>, row: DiffRow) -> Self {
+        Self {
+            file,
+            highlights,
+            row,
+            last: false,
+            collapsed: false,
+            viewed: false,
+            threads: Vec::new(),
+            on_toggle_collapsed: None,
+            on_viewed: None,
+            on_open_in_zed: None,
+            on_comment_line: None,
+            menu: None,
+        }
+    }
+
+    /// Builds the file's menu, shown from the header's ⋯ button and on right-click.
+    /// Without one the menu offers Copy path.
+    pub fn menu(
+        mut self,
+        build: impl Fn(PopupMenu, &mut Window, &mut App) -> PopupMenu + 'static,
+    ) -> Self {
+        self.menu = Some(Rc::new(build));
+        self
+    }
+
+    /// Closes the card below this row.
+    pub fn last(mut self, last: bool) -> Self {
+        self.last = last;
+        self
+    }
+
+    /// Shows the header's chevron as collapsed.
+    pub fn collapsed(mut self, collapsed: bool) -> Self {
+        self.collapsed = collapsed;
+        self
+    }
+
+    /// Checks the header's Viewed box.
+    pub fn viewed(mut self, viewed: bool) -> Self {
+        self.viewed = viewed;
+        self
+    }
+
+    /// The elements a [`DiffRow::Threads`] row shows.
+    pub fn threads(mut self, threads: impl IntoIterator<Item = AnyElement>) -> Self {
+        self.threads.extend(threads);
+        self
+    }
+
+    /// Handles the header's disclosure chevron.
+    pub fn on_toggle_collapsed(
+        mut self,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_toggle_collapsed = Some(Rc::new(handler));
+        self
+    }
+
+    /// Handles the Viewed checkbox with the requested value.
+    pub fn on_viewed(mut self, handler: impl Fn(&bool, &mut Window, &mut App) + 'static) -> Self {
+        self.on_viewed = Some(Rc::new(handler));
+        self
+    }
+
+    /// Handles Open in Zed.
+    pub fn on_open_in_zed(
+        mut self,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_open_in_zed = Some(Rc::new(handler));
+        self
+    }
+
+    /// Handles a click on a head-side line number, to start a comment there.
+    pub fn on_comment_line(
+        mut self,
+        handler: impl Fn(u32, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_comment_line = Some(Rc::new(handler));
+        self
+    }
+
+    fn render_header(&self, cx: &App) -> impl IntoElement {
+        let file = &self.file;
+        let toggle = self.on_toggle_collapsed.clone();
+        let viewed = self.on_viewed.clone();
+        let open = self.on_open_in_zed.clone();
+        let path = file.path.clone();
+        let menu: MenuBuilder = self.menu.clone().unwrap_or_else(|| {
+            Rc::new(move |menu: PopupMenu, _: &mut Window, _: &mut App| {
+                let path = path.clone();
+                menu.item(
+                    PopupMenuItem::new("Copy path")
+                        .icon(Icon::new(IconName::Copy))
+                        .on_click(move |_, _, cx| {
+                            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(path.clone()))
+                        }),
+                )
+            })
+        });
+        let context = menu.clone();
+        h_flex()
+            .id("file-header")
+            .h_10()
+            .pl_2()
+            .pr_2()
+            .gap_2()
+            .bg(cx.theme().muted.opacity(0.5))
+            .when(!self.last, |this| {
+                this.border_b_1().border_color(cx.theme().border)
+            })
+            .child(
+                Button::new("toggle")
+                    .ghost()
+                    .xsmall()
+                    .icon(if self.collapsed {
+                        IconName::ChevronRight
+                    } else {
+                        IconName::ChevronDown
+                    })
+                    .accessibility_label(if self.collapsed {
+                        "Expand file"
+                    } else {
+                        "Collapse file"
+                    })
+                    .when_some(toggle, |this, toggle| {
+                        this.on_click(move |event, window, cx| toggle(event, window, cx))
+                    }),
+            )
+            .child(
+                Icon::new(IconName::FileCode)
+                    .small()
+                    .text_color(cx.theme().muted_foreground),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_code(cx)
+                    .child(SharedString::from(file.path.clone())),
+            )
+            .child(
+                div()
+                    .text_code(cx)
+                    .text_color(cx.theme().success)
+                    .child(format!("+{}", file.additions())),
+            )
+            .child(
+                div()
+                    .text_code(cx)
+                    .text_color(cx.theme().danger)
+                    .child(format!("−{}", file.deletions())),
+            )
+            .child(div().flex_1())
+            .child(
+                Checkbox::new("viewed")
+                    .small()
+                    .label("Viewed")
+                    .checked(self.viewed)
+                    .when_some(viewed, |this, viewed| {
+                        this.on_change(move |checked, window, cx| viewed(checked, window, cx))
+                    }),
+            )
+            .child(
+                Button::new("open-in-zed")
+                    .ghost()
+                    .small()
+                    .icon(IconName::ExternalLink)
+                    .label("Open in Zed")
+                    .when_some(open, |this, open| {
+                        this.on_click(move |event, window, cx| open(event, window, cx))
+                    }),
+            )
+            .child(
+                Button::new("file-more")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Ellipsis)
+                    .accessibility_label("More file actions")
+                    .dropdown_menu_with_anchor(gpui_kit::Anchor::TopRight, {
+                        let build = menu.clone();
+                        move |menu: PopupMenu, window, cx| build(menu, window, cx)
+                    }),
+            )
+            .context_menu(move |menu, window, cx| menu_for_context(&context, menu, window, cx))
+    }
+
+    fn row_id(&self, kind: &str) -> ElementId {
+        let ix = match self.row {
+            DiffRow::Hunk(hunk) => hunk << 20,
+            DiffRow::Line { hunk, line } => (hunk << 20) | line,
+            DiffRow::Split { hunk, left, right } => {
+                (hunk << 20) | right.or(left).unwrap_or_default()
+            }
+            DiffRow::Threads(line) => line as usize,
+            DiffRow::Header | DiffRow::Binary => 0,
+        };
+        ElementId::NamedInteger(
+            SharedString::from(format!("{kind}-{}", self.file.path)),
+            ix as u64,
+        )
+    }
+}
+
+impl RenderOnce for FileDiffRow {
+    fn render(mut self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let file = self.file.clone();
+        let body: AnyElement = match self.row {
+            DiffRow::Header => self.render_header(cx).into_any_element(),
+            DiffRow::Binary => div()
+                .px_4()
+                .py_3()
+                .text_ui()
+                .text_color(cx.theme().muted_foreground)
+                .child("Binary file not shown.")
+                .into_any_element(),
+            DiffRow::Hunk(hunk) => hunk_header(&file.hunks[hunk].header(), cx).into_any_element(),
+            DiffRow::Line { hunk, line } => unified_line(
+                &file.hunks[hunk].lines[line],
+                self.highlights.line(hunk, line),
+                self.on_comment_line.clone(),
+                window,
+                cx,
+            )
+            .into_any_element(),
+            DiffRow::Split { hunk, left, right } => {
+                let lines = &file.hunks[hunk].lines;
+                let left = left.map(|ix| (&lines[ix], self.highlights.line(hunk, ix)));
+                let right = right.map(|ix| (&lines[ix], self.highlights.line(hunk, ix)));
+                h_flex()
+                    .items_stretch()
+                    .child(split_side(left, true, None, window, cx))
+                    .child(div().w_px().bg(cx.theme().border))
+                    .child(split_side(
+                        right,
+                        false,
+                        self.on_comment_line.clone(),
+                        window,
+                        cx,
+                    ))
+                    .into_any_element()
+            }
+            DiffRow::Threads(_) => {
+                thread_slot(std::mem::take(&mut self.threads)).into_any_element()
+            }
+        };
+        let id = match self.row {
+            DiffRow::Header => ElementId::Name(SharedString::from(format!("file-{}", file.path))),
+            _ => self.row_id("row"),
+        };
+        div()
+            .id(id)
+            .when(self.row == DiffRow::Header, |this| {
+                this.border_t_1()
+                    .rounded_tl(cx.theme().radius)
+                    .rounded_tr(cx.theme().radius)
+                    .overflow_hidden()
+            })
+            .border_l_1()
+            .border_r_1()
+            .border_color(cx.theme().border)
+            .when(self.last, |this| {
+                this.border_b_1()
+                    .rounded_bl(cx.theme().radius)
+                    .rounded_br(cx.theme().radius)
+                    .overflow_hidden()
+            })
+            .child(body)
+    }
+}
+
+fn hunk_header(header: &str, cx: &App) -> impl IntoElement {
+    h_flex()
+        .min_h_6()
+        .h(code_line_height(cx))
+        .bg(cx.app_theme().diff_hunk)
+        .text_code(cx)
+        .text_color(cx.theme().muted_foreground)
+        .child(div().w(gutter_width()).flex_shrink_0())
+        .child(
+            div()
+                .pl_2()
+                .truncate()
+                .child(SharedString::from(header.to_string())),
+        )
+}
+
+/// Two 40 px line-number columns and a 16 px sign column, as the design's gutter.
+fn gutter_width() -> gpui_kit::Rems {
+    rems(6.)
+}
+
+fn line_colors(kind: LineKind, cx: &App) -> (Hsla, Hsla, Hsla) {
+    let theme = cx.app_theme();
+    match kind {
+        LineKind::Added => (theme.diff_add, theme.diff_add_strong, cx.theme().success),
+        LineKind::Removed => (theme.diff_del, theme.diff_del_strong, cx.theme().danger),
+        LineKind::Context => (
+            cx.theme().transparent,
+            cx.theme().transparent,
+            cx.theme().muted_foreground,
+        ),
+    }
+}
+
+fn sign(kind: LineKind) -> &'static str {
+    match kind {
+        LineKind::Added => "+",
+        LineKind::Removed => "−",
+        LineKind::Context => "",
+    }
+}
+
+fn number_cell(number: Option<u32>, cx: &App) -> impl IntoElement {
+    div()
+        .w(rems(2.5))
+        .flex_shrink_0()
+        .pr_2()
+        .text_right()
+        .text_gutter(cx)
+        .text_color(cx.theme().muted_foreground)
+        .children(number.map(|n| n.to_string()))
+}
+
+fn code_cell(
+    text: &str,
+    spans: &[(std::ops::Range<usize>, gpui_kit::HighlightStyle)],
+    cx: &App,
+) -> impl IntoElement {
+    let (text, spans) = expand_tabs(text, spans);
+    div()
+        .flex_1()
+        .min_w_0()
+        .pl_2()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_code(cx)
+        .child(StyledText::new(SharedString::from(text)).with_highlights(spans))
+}
+
+fn unified_line(
+    line: &DiffLine,
+    spans: &[(std::ops::Range<usize>, gpui_kit::HighlightStyle)],
+    on_comment_line: Option<LineHandler>,
+    _: &mut Window,
+    cx: &App,
+) -> impl IntoElement {
+    let (background, gutter, sign_color) = line_colors(line.kind, cx);
+    let comment_line = line.new_line.filter(|_| line.kind != LineKind::Removed);
+    let commentable = comment_line.is_some() && on_comment_line.is_some();
+    h_flex()
+        .group(LINE_GROUP)
+        .h(code_line_height(cx))
+        .bg(background)
+        .child(
+            h_flex()
+                .id(SharedString::from(format!(
+                    "gutter-{}-{}",
+                    line.old_line.unwrap_or(0),
+                    line.new_line.unwrap_or(0)
+                )))
+                .relative()
+                .h_full()
+                .w(gutter_width())
+                .flex_shrink_0()
+                .bg(gutter)
+                .child(number_cell(line.old_line, cx))
+                .child(number_cell(line.new_line, cx))
+                .child(
+                    div()
+                        .w_4()
+                        .text_gutter(cx)
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(sign_color)
+                        .child(sign(line.kind)),
+                )
+                .when(commentable, |this| this.child(comment_badge(cx)))
+                .when_some(
+                    comment_line.zip(on_comment_line),
+                    |this, (number, handler)| {
+                        this.cursor_pointer()
+                            .hover(|style| style.bg(cx.app_theme().diff_hunk))
+                            .tooltip(|window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new("Comment on this line")
+                                    .build(window, cx)
+                            })
+                            .on_click(move |_, window, cx| handler(number, window, cx))
+                    },
+                )
+                .test_support(),
+        )
+        .child(code_cell(&line.text, spans, cx))
+}
+
+fn split_side(
+    line: Option<(&DiffLine, &Spans)>,
+    old_side: bool,
+    on_comment_line: Option<LineHandler>,
+    _: &mut Window,
+    cx: &App,
+) -> impl IntoElement {
+    let Some((line, spans)) = line else {
+        return h_flex()
+            .flex_1()
+            .min_w_0()
+            .h(code_line_height(cx))
+            .bg(cx.theme().muted.opacity(0.4))
+            .into_any_element();
+    };
+    let (background, gutter, sign_color) = line_colors(line.kind, cx);
+    let number = if old_side {
+        line.old_line
+    } else {
+        line.new_line
+    };
+    let comment_line = (!old_side).then_some(line.new_line).flatten();
+    let commentable = comment_line.is_some() && on_comment_line.is_some();
+    h_flex()
+        .group(LINE_GROUP)
+        .flex_1()
+        .min_w_0()
+        .h(code_line_height(cx))
+        .bg(background)
+        .child(
+            h_flex()
+                .id(SharedString::from(format!(
+                    "split-{}-{}",
+                    if old_side { "old" } else { "new" },
+                    number.unwrap_or(0)
+                )))
+                .relative()
+                .h_full()
+                .w(rems(3.5))
+                .flex_shrink_0()
+                .bg(gutter)
+                .child(number_cell(number, cx))
+                .child(
+                    div()
+                        .w_4()
+                        .text_gutter(cx)
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(sign_color)
+                        .child(sign(line.kind)),
+                )
+                .when(commentable, |this| this.child(comment_badge(cx)))
+                .when_some(
+                    comment_line.zip(on_comment_line),
+                    |this, (number, handler)| {
+                        this.cursor_pointer()
+                            .on_click(move |_, window, cx| handler(number, window, cx))
+                    },
+                )
+                .test_support(),
+        )
+        .child(code_cell(&line.text, spans, cx))
+        .into_any_element()
+}
+
+/// Columns between tab stops when a tab is expanded.
+const TAB_WIDTH: usize = 4;
+
+/// Expands tabs to the next tab stop, shifting the highlight spans by the bytes each
+/// tab grew, so indented Go and Makefiles keep their colors.
+fn expand_tabs(
+    text: &str,
+    spans: &[(std::ops::Range<usize>, gpui_kit::HighlightStyle)],
+) -> (
+    String,
+    Vec<(std::ops::Range<usize>, gpui_kit::HighlightStyle)>,
+) {
+    if !text.contains('\t') {
+        return (text.to_string(), spans.to_vec());
+    }
+    let mut expanded = String::with_capacity(text.len() + 16);
+    // `offsets[i]` is where byte `i` of `text` lands in `expanded`, plus the end.
+    let mut offsets = vec![0; text.len() + 1];
+    let mut column = 0;
+    for (ix, ch) in text.char_indices() {
+        offsets[ix] = expanded.len();
+        if ch == '\t' {
+            let width = TAB_WIDTH - column % TAB_WIDTH;
+            expanded.extend(std::iter::repeat_n(' ', width));
+            column += width;
+        } else {
+            expanded.push(ch);
+            column += 1;
+        }
+    }
+    offsets[text.len()] = expanded.len();
+    let spans = spans
+        .iter()
+        .filter(|(range, _)| range.end <= text.len())
+        .map(|(range, style)| (offsets[range.start]..offsets[range.end], *style))
+        .collect();
+    (expanded, spans)
+}
+
+/// Builds a context menu with `build`, which needs the window context the menu runs in.
+fn menu_for_context(
+    build: &MenuBuilder,
+    menu: PopupMenu,
+    window: &mut Window,
+    cx: &mut gpui_kit::Context<PopupMenu>,
+) -> PopupMenu {
+    build(menu, window, cx)
+}
+
+/// Hover group of a diff line, which reveals its comment badge.
+const LINE_GROUP: &str = "diff-line";
+
+/// The `+` that appears at the end of the gutter while the line is hovered, marking
+/// the gutter as the place to click to comment.
+fn comment_badge(cx: &App) -> impl IntoElement {
+    div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .right_0()
+        .w_4()
+        .flex()
+        .items_center()
+        .justify_center()
+        .opacity(0.)
+        .group_hover(LINE_GROUP, |style| style.opacity(1.))
+        .child(
+            div()
+                .size_4()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(cx.theme().radius)
+                .bg(cx.app_theme().accent)
+                .text_color(cx.theme().background)
+                .child(Icon::new(IconName::Plus).xsmall()),
+        )
+}
+
+fn thread_slot(threads: Vec<AnyElement>) -> impl IntoElement {
+    v_flex()
+        .gap_2()
+        .pt_2()
+        .pb_3()
+        .pr_3()
+        .pl(rems(6.5))
+        .children(threads)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tabs_expand_to_stops_and_spans_follow() {
+        let style = gpui_kit::HighlightStyle::default();
+        let (text, spans) = expand_tabs("\treturn x\t// y", &[(1..7, style), (10..14, style)]);
+        assert_eq!(text, "    return x    // y");
+        assert_eq!(&text[spans[0].0.clone()], "return");
+        assert_eq!(&text[spans[1].0.clone()], "// y");
+    }
+}

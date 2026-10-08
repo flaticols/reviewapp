@@ -1,0 +1,23 @@
+[package]
+name = "agent_review_ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+tool_path.workspace = true
+gpui-kit.workspace = true
+acp_client.workspace = true
+agent_registry.workspace = true
+app_state_ui.workspace = true
+diff_model.workspace = true
+git_worktree.workspace = true
+pr_model.workspace = true
+review_model.workspace = true
+settings_model.workspace = true
+theme_ui.workspace = true
+widgets_ui.workspace = true
+
+[lints]
+workspace = true

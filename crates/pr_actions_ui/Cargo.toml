@@ -1,0 +1,23 @@
+[package]
+name = "pr_actions_ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+gpui-kit.workspace = true
+app_state_ui.workspace = true
+git_diff.workspace = true
+settings_model.workspace = true
+zed_bridge.workspace = true
+git_worktree.workspace = true
+github_api.workspace = true
+pr_model.workspace = true
+review_model.workspace = true
+sha2.workspace = true
+theme_ui.workspace = true
+widgets_ui.workspace = true
+
+[lints]
+workspace = true

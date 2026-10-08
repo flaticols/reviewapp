@@ -1,0 +1,473 @@
+//! Renders Switchfold's screens with the sample workspace to PNG files, offscreen, in
+//! light and dark mode, for comparison with the Sketch design.
+//!
+//! `cargo run -p screenshots_ui -- [--live] [--pr owner/name#N] [out-dir] [scene…]`
+//!
+//! `--live` renders the signed-in `gh` account's real pull requests instead of the sample;
+//! `--pr` picks the pull request the review scenes open.
+
+use std::cell::RefCell;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::sync::Arc;
+
+use gpui_kit::{AppContext as _, Entity, HeadlessAppContext, px, size};
+use pr_model::{PullRequestKey, RepoSlug};
+use review_model::ReviewVerdict;
+use settings_model::Appearance;
+use settings_ui::SettingsPageKind;
+use workspace_ui::{Workspace, launch};
+
+/// Every screen the tool can render.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Scene {
+    List,
+    Thread,
+    /// The Approve confirmation popover.
+    ApprovePopover,
+    /// A pull request row's context menu.
+    RowMenu,
+    /// A file header's context menu.
+    FileMenu,
+    /// One commit picked in the commit menu.
+    OneCommit,
+    /// The Request review dialog.
+    RequestReview,
+    /// The pull request popover from the title bar.
+    TitlePopover,
+    /// The thread with a picked code font and size.
+    ThreadCodeFont,
+    /// The thread in the Espresso dark palette.
+    ThreadEspresso,
+    /// The thread scrolled to its first file.
+    ThreadFirstFile,
+    Submit,
+    StartAgent,
+    CheckLog,
+    SignIn,
+    Accounts,
+    Repositories,
+    Agents,
+    Appearance,
+    Keyboard,
+    Palette,
+    AgentRun,
+    /// The Reviews tab during the mock agent's run.
+    ReviewsTab,
+    /// A real review by the default agent, run to the end. Only with `--live`, and only
+    /// when named, since it uses the agent's quota.
+    LiveReview,
+}
+
+impl Scene {
+    const ALL: [Scene; 24] = [
+        Self::List,
+        Self::OneCommit,
+        Self::RowMenu,
+        Self::FileMenu,
+        Self::RequestReview,
+        Self::Thread,
+        Self::ApprovePopover,
+        Self::TitlePopover,
+        Self::ThreadCodeFont,
+        Self::ThreadEspresso,
+        Self::ThreadFirstFile,
+        Self::Submit,
+        Self::StartAgent,
+        Self::CheckLog,
+        Self::SignIn,
+        Self::Accounts,
+        Self::Repositories,
+        Self::Agents,
+        Self::Appearance,
+        Self::Keyboard,
+        Self::Palette,
+        Self::AgentRun,
+        Self::ReviewsTab,
+        Self::LiveReview,
+    ];
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::List => "01-list",
+            Self::Thread => "02-thread",
+            Self::ApprovePopover => "03b-approve-popover",
+            Self::RowMenu => "01c-row-menu",
+            Self::FileMenu => "02h-file-menu",
+            Self::OneCommit => "02i-one-commit",
+            Self::RequestReview => "03c-request-review",
+            Self::TitlePopover => "02e-title-popover",
+            Self::ThreadCodeFont => "02c-thread-code-font",
+            Self::ThreadEspresso => "02g-thread-espresso",
+            Self::ThreadFirstFile => "02d-thread-first-file",
+            Self::Submit => "03-submit",
+            Self::StartAgent => "05a-start-agent",
+            Self::CheckLog => "04-check-log",
+            Self::SignIn => "06-sign-in",
+            Self::Accounts => "07-accounts",
+            Self::Repositories => "07b-repositories",
+            Self::Agents => "07c-agents",
+            Self::Appearance => "07d-appearance",
+            Self::Keyboard => "07e-keyboard",
+            Self::Palette => "08-palette",
+            Self::AgentRun => "05-agent-running",
+            Self::ReviewsTab => "05b-reviews-tab",
+            Self::LiveReview => "09-live-review",
+        }
+    }
+}
+
+fn featured() -> PullRequestKey {
+    PullRequestKey::new(RepoSlug::new("flaticols", "switchfold"), 482)
+}
+
+fn render(
+    scene: Scene,
+    appearance: Appearance,
+    live: bool,
+    pull_request: Option<&PullRequestKey>,
+    out: &Path,
+) -> anyhow::Result<PathBuf> {
+    let text_system = gpui_kit::platform::current_platform(true).text_system();
+    let mut cx =
+        HeadlessAppContext::with_platform(text_system, Arc::new(widgets_ui::AppAssets), || {
+            gpui_kit::platform::current_headless_renderer()
+        });
+    let home = if live {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default()
+    } else {
+        PathBuf::from("/Users/denis")
+    };
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        pr_list_ui::init(cx);
+        review_thread_ui::init(cx);
+        workspace_ui::init(cx);
+        let mut data = if live {
+            launch::live_data(&home)
+        } else {
+            launch::sample_data(&home)
+        };
+        data.settings_path = None;
+        if scene == Scene::SignIn {
+            data.settings.accounts.clear();
+        }
+        launch::install_stores(data, Some(home.clone()), cx);
+        let mut look = settings_model::Preferences::default();
+        look.appearance = appearance;
+        if scene == Scene::ThreadEspresso {
+            look.dark_theme = settings_model::DarkTheme::Espresso;
+        }
+        if scene == Scene::ThreadCodeFont {
+            look.code_font_family = Some("Courier New".into());
+            look.code_font_size = Some(15.);
+        }
+        theme_ui::apply(&look, None, cx);
+    });
+
+    let workspace: Rc<RefCell<Option<Entity<Workspace>>>> = Rc::default();
+    let built = workspace.clone();
+    let window = cx.open_window(size(px(1440.), px(900.)), move |window, cx| {
+        let view = cx.new(|cx| Workspace::new(window, cx));
+        *built.borrow_mut() = Some(view.clone());
+        cx.new(|cx| gpui_kit::base::Root::new(view, window, cx))
+    })?;
+    cx.run_until_parked();
+    let workspace = workspace.borrow().clone().expect("workspace was built");
+
+    let target = if let Some(key) = pull_request {
+        key.clone()
+    } else if live {
+        cx.update(|cx| {
+            use app_state_ui::StoresExt as _;
+            let store = cx.stores().pull_requests().read(cx);
+            store
+                .pull_requests()
+                .iter()
+                .find(|pr| pr.is_in(pr_model::Inbox::ReviewRequested))
+                .or(store.pull_requests().first())
+                .map(|pr| pr.key.clone())
+        })
+        .unwrap_or_else(featured)
+    } else {
+        featured()
+    };
+    cx.update_window(window.into(), |_, window, cx| {
+        let opens_review = matches!(
+            scene,
+            Scene::AgentRun | Scene::ReviewsTab | Scene::LiveReview
+        ) || matches!(
+            scene,
+            Scene::Thread
+                | Scene::ApprovePopover
+                | Scene::FileMenu
+                | Scene::OneCommit
+                | Scene::RequestReview
+                | Scene::TitlePopover
+                | Scene::ThreadCodeFont
+                | Scene::ThreadEspresso
+                | Scene::ThreadFirstFile
+                | Scene::Submit
+                | Scene::StartAgent
+                | Scene::CheckLog
+        );
+        if opens_review {
+            workspace.update(cx, |workspace, cx| {
+                workspace.open_pull_request(target.clone(), window, cx)
+            });
+        }
+        let page = match scene {
+            Scene::Accounts => Some(SettingsPageKind::Accounts),
+            Scene::Repositories => Some(SettingsPageKind::Repositories),
+            Scene::Agents => Some(SettingsPageKind::AgentsAndEditor),
+            Scene::Appearance => Some(SettingsPageKind::Appearance),
+            Scene::Keyboard => Some(SettingsPageKind::Keyboard),
+            _ => None,
+        };
+        if let Some(page) = page {
+            workspace.update(cx, |workspace, cx| {
+                workspace.open_settings(page, window, cx)
+            });
+        }
+    })?;
+    cx.run_until_parked();
+
+    cx.update_window(window.into(), |_, window, cx| match scene {
+        Scene::Submit => submit_review_ui::open(
+            target.clone(),
+            Some(ReviewVerdict::RequestChanges),
+            window,
+            cx,
+        ),
+        Scene::StartAgent => {
+            if let Some(review) = workspace.read(cx).review_view() {
+                review.update(cx, |review, cx| review.open_agent_review(window, cx));
+            }
+        }
+        Scene::CheckLog => check_log_ui::open(
+            featured(),
+            fixtures::SNAPSHOT_CHECK_ID.to_string(),
+            window,
+            cx,
+        ),
+        Scene::Palette => window.dispatch_action(Box::new(app_state_ui::actions::FocusSearch), cx),
+        Scene::RowMenu => {
+            use gpui_kit::test::TestWindowExt as _;
+            window.render_frame(cx);
+            window.right_click("flaticols/switchfold#482", cx);
+        }
+        Scene::FileMenu => {
+            use gpui_kit::test::TestWindowExt as _;
+            window.render_frame(cx);
+            window
+                .within(gpui_kit::SharedString::from(
+                    "file-crates/review/src/thread.rs",
+                ))
+                .right_click("toggle", cx);
+        }
+        Scene::OneCommit => {
+            if let Some(review) = workspace.read(cx).review_view() {
+                review.update(cx, |review, cx| {
+                    let sha = review
+                        .detail()
+                        .and_then(|detail| detail.commits.first())
+                        .map(|commit| commit.sha.clone());
+                    if let Some(sha) = sha {
+                        review.show_commit(sha, cx);
+                    }
+                });
+            }
+        }
+        Scene::RequestReview => {
+            pr_actions_ui::open_request_review(target.clone(), window, cx);
+        }
+        Scene::ApprovePopover | Scene::TitlePopover => {
+            use gpui_kit::test::TestWindowExt as _;
+            window.render_frame(cx);
+            window.click(
+                if scene == Scene::ApprovePopover {
+                    "approve"
+                } else {
+                    "pull-request-title"
+                },
+                cx,
+            );
+        }
+        Scene::ThreadFirstFile => {
+            if let Some(review) = workspace.read(cx).review_view() {
+                // With the sample data the first file holds tanya's thread and its reply box.
+                review.update(cx, |review, cx| {
+                    let first = review
+                        .detail()
+                        .and_then(|detail| detail.files.first())
+                        .map(|file| file.path.clone());
+                    if let Some(path) = first {
+                        review.reveal_file(&path, cx);
+                    }
+                });
+            }
+        }
+        Scene::AgentRun | Scene::ReviewsTab => {
+            let bin = std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(Path::to_path_buf))
+                .unwrap_or_default();
+            let mut agent = settings_model::AgentConfig::new(
+                "mock",
+                "Claude Code",
+                bin.join("acp-mock-agent").display().to_string(),
+                Vec::new(),
+            );
+            agent.model = Some("deep".into());
+            agent.effort = Some("high".into());
+            let options = agent_review_ui::StartOptions::new()
+                .with_findings_server(bin.join("acp-findings-server"));
+            agent_review_ui::start_review(target.clone(), agent, options.clone(), window, cx);
+            if scene == Scene::ReviewsTab {
+                let mut codex = settings_model::AgentConfig::new(
+                    "mock-codex",
+                    "Codex",
+                    bin.join("acp-mock-agent").display().to_string(),
+                    Vec::new(),
+                );
+                codex.model = Some("unsupported".into());
+                agent_review_ui::start_review(target.clone(), codex, options, window, cx);
+            }
+        }
+        _ => {}
+    })?;
+    cx.run_until_parked();
+    if scene == Scene::StartAgent {
+        // The dialog asks the real agent for its models, which takes a few seconds.
+        for _ in 0..150 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            cx.run_until_parked();
+        }
+    }
+    if scene == Scene::LiveReview {
+        let started = cx.update_window(window.into(), |_, window, cx| {
+            use app_state_ui::StoresExt as _;
+            let agent = cx.stores().settings().read(cx).default_agent().cloned();
+            agent.is_some_and(|agent| {
+                agent_review_ui::start_review(
+                    target.clone(),
+                    agent,
+                    agent_review_ui::StartOptions::new(),
+                    window,
+                    cx,
+                )
+            })
+        })?;
+        anyhow::ensure!(started, "the review couldn't start");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15 * 60);
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            cx.run_until_parked();
+            let over = cx.update(|cx| {
+                let runs = agent_review_ui::runs_for(&target, cx);
+                let Some(run) = runs.first() else {
+                    return true;
+                };
+                if run.read(cx).permission().is_some() {
+                    run.update(cx, |run, cx| run.answer(acp_client::Decision::Deny, cx));
+                }
+                let run = run.read(cx);
+                if run.state().is_over() {
+                    eprintln!(
+                        "{:?} after {:?}; transcript {:?}",
+                        run.state(),
+                        run.elapsed(),
+                        run.log_path()
+                    );
+                    true
+                } else {
+                    false
+                }
+            });
+            if over || std::time::Instant::now() > deadline {
+                break;
+            }
+        }
+        cx.update_window(window.into(), |_, _, cx| {
+            if let Some(review) = workspace.read(cx).review_view() {
+                review.update(cx, |review, cx| {
+                    review.show_filter(review_thread_ui::TimelineFilter::Reviews, cx)
+                });
+            }
+        })?;
+    }
+    if matches!(scene, Scene::AgentRun | Scene::ReviewsTab) {
+        // The mock agent runs as a real process; give it time to read files and ask.
+        for _ in 0..30 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            cx.run_until_parked();
+        }
+        cx.update_window(window.into(), |_, _, cx| {
+            if let Some(review) = workspace.read(cx).review_view() {
+                review.update(cx, |review, cx| {
+                    if scene == Scene::ReviewsTab {
+                        review.show_filter(review_thread_ui::TimelineFilter::Reviews, cx)
+                    } else {
+                        review.scroll_to_end(cx)
+                    }
+                });
+            }
+        })?;
+    }
+    // Overlay open animations run on wall-clock time; let them finish before capturing.
+    for _ in 0..4 {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        cx.update_window(window.into(), |_, window, _| window.refresh())?;
+        cx.run_until_parked();
+    }
+
+    let image = cx.capture_screenshot(window.into())?;
+    let mode = match appearance {
+        Appearance::Dark => "dark",
+        _ => "light",
+    };
+    let source = if live { "-live" } else { "" };
+    let path = out.join(format!("{}{source}-{mode}.png", scene.name()));
+    image.save(&path)?;
+    Ok(path)
+}
+
+fn main() -> anyhow::Result<()> {
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let live = args.iter().any(|arg| arg == "--live");
+    args.retain(|arg| arg != "--live");
+    let pull_request = match args.iter().position(|arg| arg == "--pr") {
+        Some(ix) => {
+            args.remove(ix);
+            let arg = args.remove(ix);
+            Some(
+                launch::parse_pull_request_arg(&arg)
+                    .ok_or_else(|| anyhow::anyhow!("--pr takes owner/name#number, not {arg}"))?,
+            )
+        }
+        None => None,
+    };
+    let mut args = args.into_iter();
+    let out = PathBuf::from(args.next().unwrap_or_else(|| "target/screenshots".into()));
+    let only: Vec<String> = args.collect();
+    std::fs::create_dir_all(&out)?;
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        for scene in Scene::ALL {
+            if !only.is_empty() && !only.iter().any(|name| scene.name().contains(name.as_str())) {
+                continue;
+            }
+            if scene == Scene::LiveReview
+                && (!live
+                    || !only.iter().any(|n| n == "09-live-review")
+                    || appearance == Appearance::Dark)
+            {
+                continue;
+            }
+            let path = render(scene, appearance, live, pull_request.as_ref(), &out)?;
+            println!("{}", path.display());
+        }
+    }
+    Ok(())
+}

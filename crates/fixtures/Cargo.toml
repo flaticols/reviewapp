@@ -1,0 +1,16 @@
+[package]
+name = "fixtures"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+pr_model.workspace = true
+diff_model.workspace = true
+review_model.workspace = true
+settings_model.workspace = true
+git_diff.workspace = true
+
+[lints]
+workspace = true

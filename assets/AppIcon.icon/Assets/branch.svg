@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <g fill="none" stroke="#2F6BEA" stroke-width="40" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="420" cy="420" r="44"/>
+    <line x1="420" y1="464" x2="420" y2="628"/>
+    <circle cx="420" cy="672" r="44"/>
+    <circle cx="624" cy="672" r="44"/>
+    <path d="M624 628 V512 Q624 436 548 436 H492"/>
+    <polyline points="536,392 492,436 536,480"/>
+  </g>
+</svg>

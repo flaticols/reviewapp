@@ -1,0 +1,572 @@
+//! UI integration tests: the real workspace with the sample data, driven by native
+//! pointer and keyboard events.
+
+use gpui_kit::component::Root;
+use gpui_kit::test::TestWindowExt;
+use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext, px, size};
+use pr_model::{PullRequestKey, RepoSlug};
+use review_model::{ReviewVerdict, ReviewerState, TimelineItem};
+use workspace_ui::{Workspace, launch};
+
+fn featured() -> PullRequestKey {
+    PullRequestKey::new(RepoSlug::new("flaticols", "switchfold"), 482)
+}
+
+fn open(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<Workspace>) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        pr_list_ui::init(cx);
+        review_thread_ui::init(cx);
+        workspace_ui::init(cx);
+        let home = std::path::PathBuf::from("/Users/test");
+        launch::install_stores(launch::sample_data(&home), Some(home), cx);
+        let mut look = settings_model::Preferences::default();
+        look.appearance = settings_model::Appearance::Dark;
+        theme_ui::apply(&look, None, cx);
+    });
+    let mut workspace = None;
+    let handle = cx.open_window(size(px(1440.), px(900.)), |window, cx| {
+        let view = cx.new(|cx| Workspace::new(window, cx));
+        workspace = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    cx.run_until_parked();
+    (handle.into(), workspace.expect("workspace was built"))
+}
+
+fn open_featured(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<Workspace>) {
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.open_pull_request(featured(), window, cx)
+        });
+    })
+    .unwrap();
+    cx.run_until_parked();
+    (window, workspace)
+}
+
+/// Waits for overlay open animations, which run on wall-clock time, to bring `id` to
+/// rest, so pointer events land where the control will stay.
+fn settle(window: AnyWindowHandle, id: &'static str, cx: &mut TestAppContext) {
+    let mut last = None;
+    for _ in 0..40 {
+        cx.run_until_parked();
+        let bounds = cx
+            .update_window(window, |_, window, cx| {
+                window.render_frame(cx);
+                window.try_find(id).map(|target| target.bounds())
+            })
+            .unwrap();
+        if bounds.is_some() && bounds == last {
+            return;
+        }
+        last = bounds;
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    panic!("{id} never came to rest");
+}
+
+#[gpui_kit::test]
+fn keyboard_opens_a_pull_request_and_escape_returns(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.press("down", cx);
+        window.press("enter", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let opened = cx.update(|cx| workspace.read(cx).reviewing(cx));
+    assert_eq!(opened, Some(featured()), "the first review request opens");
+
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.press("escape", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(cx.update(|cx| workspace.read(cx).reviewing(cx)), None);
+}
+
+#[gpui_kit::test]
+fn viewed_checkbox_marks_the_file(cx: &mut TestAppContext) {
+    let (window, _) = open_featured(cx);
+    let path = "crates/review/src/thread.rs";
+    let viewed = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            use app_state_ui::StoresExt as _;
+            cx.stores()
+                .pull_requests()
+                .read(cx)
+                .loaded_detail(&featured())
+                .map(|detail| detail.is_viewed(path))
+        })
+    };
+    assert_eq!(viewed(cx), Some(false));
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window
+            .within(gpui_kit::SharedString::from(format!("file-{path}")))
+            .click("viewed", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(viewed(cx), Some(true));
+}
+
+#[gpui_kit::test]
+fn approving_through_the_dialog_updates_reviewers_and_timeline(cx: &mut TestAppContext) {
+    let (window, _) = open_featured(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("submit-review", cx);
+    })
+    .unwrap();
+    settle(window, "verdict-Approve", cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("verdict-Approve", cx);
+        assert_eq!(window.find("verdict-Approve").checked(), Some(true));
+        assert_eq!(window.find("verdict-Comment").checked(), Some(false));
+        window.click("submit", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update(|cx| {
+        use app_state_ui::StoresExt as _;
+        let store = cx.stores().pull_requests().read(cx);
+        let detail = store
+            .loaded_detail(&featured())
+            .expect("detail stays loaded");
+        let viewer = detail.reviewers.iter().find(|r| r.is_viewer).unwrap();
+        assert_eq!(viewer.state, ReviewerState::Approved);
+        assert!(matches!(
+            detail.timeline.last(),
+            Some(TimelineItem::Reviewed {
+                verdict: ReviewVerdict::Approve,
+                ..
+            })
+        ));
+        assert!(
+            detail
+                .threads
+                .iter()
+                .flat_map(|t| &t.comments)
+                .all(|c| !c.is_pending)
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn escape_in_the_composer_keeps_the_review_and_its_draft(cx: &mut TestAppContext) {
+    use gpui_kit::component::WindowExt as _;
+    let (window, workspace) = open_featured(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("description-reply", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        assert!(window.has_focused_input(cx), "Reply focuses the composer");
+        window.input("Looks right", cx);
+        window.press("escape", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|cx| workspace.read(cx).reviewing(cx)),
+        Some(featured()),
+        "the review stays open"
+    );
+    cx.update_window(window, |_, window, cx| {
+        assert!(!window.has_focused_input(cx), "Escape leaves the composer");
+        window.render_frame(cx);
+        window.press("escape", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(cx.update(|cx| workspace.read(cx).reviewing(cx)), None);
+}
+
+#[gpui_kit::test]
+fn a_check_opens_its_log_and_escape_closes_only_the_sheet(cx: &mut TestAppContext) {
+    use gpui_kit::component::WindowExt as _;
+    let (window, workspace) = open_featured(cx);
+    let row = format!("inspector-check-{}", fixtures::SNAPSHOT_CHECK_ID);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(gpui_kit::SharedString::from(row), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        assert!(window.has_active_sheet(cx), "the check log opens");
+        window.render_frame(cx);
+        window.press("escape", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        assert!(!window.has_active_sheet(cx), "Escape closes the sheet");
+    })
+    .unwrap();
+    assert_eq!(
+        cx.update(|cx| workspace.read(cx).reviewing(cx)),
+        Some(featured()),
+        "the review stays open under the sheet"
+    );
+}
+
+#[gpui_kit::test]
+fn clicking_a_line_number_starts_a_pending_thread(cx: &mut TestAppContext) {
+    use gpui_kit::component::WindowExt as _;
+    let (window, _) = open_featured(cx);
+    let path = "crates/review/src/thread.rs";
+    let threads = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            use app_state_ui::StoresExt as _;
+            cx.stores()
+                .pull_requests()
+                .read(cx)
+                .loaded_detail(&featured())
+                .map(|detail| {
+                    detail
+                        .threads
+                        .iter()
+                        .filter(|thread| thread.path == path && thread.line == 137)
+                        .count()
+                })
+        })
+    };
+    assert_eq!(threads(cx), Some(0));
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("gutter-137-137", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window.has_focused_input(cx),
+            "the line comment field takes focus"
+        );
+        window.input("Rename this", cx);
+        window.press("enter", cx);
+        window.input("and its callers", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        threads(cx),
+        Some(0),
+        "Enter adds a line instead of submitting"
+    );
+    cx.update_window(window, |_, window, cx| window.press("cmd-enter", cx))
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(threads(cx), Some(1));
+    let body = cx.update(|cx| {
+        use app_state_ui::StoresExt as _;
+        cx.stores()
+            .pull_requests()
+            .read(cx)
+            .loaded_detail(&featured())
+            .and_then(|detail| {
+                detail
+                    .threads
+                    .iter()
+                    .find(|thread| thread.line == 137)
+                    .map(|thread| thread.comments[0].body.clone())
+            })
+    });
+    assert_eq!(body.as_deref(), Some("Rename this\nand its callers"));
+}
+
+#[gpui_kit::test]
+fn approve_asks_in_a_popover_listing_approvals(cx: &mut TestAppContext) {
+    let (window, _) = open_featured(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("approve", cx);
+    })
+    .unwrap();
+    settle(window, "approve-confirm", cx);
+    let viewer_state = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            use app_state_ui::StoresExt as _;
+            cx.stores()
+                .pull_requests()
+                .read(cx)
+                .loaded_detail(&featured())
+                .and_then(|detail| detail.reviewers.iter().find(|r| r.is_viewer).cloned())
+                .map(|viewer| viewer.state)
+        })
+    };
+    assert_eq!(
+        viewer_state(cx),
+        Some(ReviewerState::Pending),
+        "opening the popover approves nothing"
+    );
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("approve-confirm", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(viewer_state(cx), Some(ReviewerState::Approved));
+}
+
+#[gpui_kit::test]
+fn menu_actions_close_reopen_approve_and_request_reviews(cx: &mut TestAppContext) {
+    use app_state_ui::StoresExt as _;
+    let (_, _) = open(cx);
+    let key = PullRequestKey::new(RepoSlug::new("flaticols", "switchfold"), 477);
+    let state = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            cx.stores()
+                .pull_requests()
+                .read(cx)
+                .pull_request(&key)
+                .map(|pr| (pr.state, pr.review))
+        })
+    };
+    let close = cx.update(|cx| {
+        cx.stores()
+            .pull_requests()
+            .clone()
+            .update(cx, |store, cx| store.set_open(&key, false, cx))
+    });
+    cx.run_until_parked();
+    assert!(futures::executor::block_on(close).is_ok());
+    assert_eq!(
+        state(cx).map(|s| s.0),
+        Some(pr_model::PullRequestState::Closed)
+    );
+
+    let reopen = cx.update(|cx| {
+        cx.stores()
+            .pull_requests()
+            .clone()
+            .update(cx, |store, cx| store.set_open(&key, true, cx))
+    });
+    cx.run_until_parked();
+    assert!(futures::executor::block_on(reopen).is_ok());
+    assert_eq!(
+        state(cx).map(|s| s.0),
+        Some(pr_model::PullRequestState::Open)
+    );
+
+    let approve = cx.update(|cx| {
+        let viewer = cx.stores().settings().read(cx).viewer_actor();
+        cx.stores()
+            .pull_requests()
+            .clone()
+            .update(cx, |store, cx| store.approve(&key, &viewer, cx))
+    });
+    cx.run_until_parked();
+    assert!(futures::executor::block_on(approve).is_ok());
+    assert_eq!(
+        state(cx).map(|s| s.1),
+        Some(pr_model::ReviewDecision::Approved)
+    );
+
+    let people = cx.update(|cx| {
+        cx.stores()
+            .pull_requests()
+            .clone()
+            .update(cx, |store, cx| store.assignable_users(key.repo(), cx))
+    });
+    cx.run_until_parked();
+    let people = futures::executor::block_on(people).expect("reviewers load");
+    assert!(people.iter().any(|actor| actor.login == "tanya"));
+    let request = cx.update(|cx| {
+        let tanya = people.iter().find(|a| a.login == "tanya").cloned().unwrap();
+        cx.stores().pull_requests().clone().update(cx, |store, cx| {
+            store.request_reviewers(&key, vec![tanya], cx)
+        })
+    });
+    cx.run_until_parked();
+    assert!(futures::executor::block_on(request).is_ok());
+}
+
+#[gpui_kit::test]
+fn picking_a_commit_shows_only_its_changes(cx: &mut TestAppContext) {
+    let (window, workspace) = open_featured(cx);
+    let review = cx
+        .update(|cx| workspace.read(cx).review_view())
+        .expect("review open");
+    let (all, sha) = cx.update(|cx| {
+        let review = review.read(cx);
+        let sha = review
+            .detail()
+            .and_then(|d| d.commits.first())
+            .map(|c| c.sha.clone());
+        (review.shown_files().len(), sha)
+    });
+    cx.update_window(window, |_, _, cx| {
+        review.update(cx, |review, cx| {
+            review.show_commit(sha.clone().unwrap(), cx)
+        })
+    })
+    .unwrap();
+    cx.run_until_parked();
+    for _ in 0..20 {
+        if cx.update(|cx| review.read(cx).shown_files().len()) > 0 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        cx.run_until_parked();
+    }
+    let picked = cx.update(|cx| review.read(cx).shown_files().len());
+    assert_eq!(picked, all - 1, "the sample commit drops one file");
+    cx.update_window(window, |_, _, cx| {
+        review.update(cx, |review, cx| review.show_all_commits(cx))
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(cx.update(|cx| review.read(cx).shown_files().len()), all);
+}
+
+#[gpui_kit::test]
+fn focus_mode_hides_both_sidebars_and_brings_them_back(cx: &mut TestAppContext) {
+    let (window, _) = open_featured(cx);
+    let shown = |cx: &mut TestAppContext| {
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            (
+                window.try_find("outline").is_some(),
+                window.try_find("inspector").is_some(),
+            )
+        })
+        .unwrap()
+    };
+    let click = |id: &'static str, cx: &mut TestAppContext| {
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.click(id, cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+    };
+    assert_eq!(shown(cx), (true, true));
+    click("toggle-inspector", cx);
+    assert_eq!(shown(cx), (true, false));
+    click("toggle-focus", cx);
+    assert_eq!(shown(cx), (false, false));
+    click("toggle-focus", cx);
+    assert_eq!(shown(cx), (true, false), "focus mode restores what it hid");
+    click("toggle-inspector", cx);
+    assert_eq!(shown(cx), (true, true));
+}
+
+#[gpui_kit::test]
+fn a_link_from_zed_opens_a_comment_on_its_line(cx: &mut TestAppContext) {
+    use app_state_ui::StoresExt as _;
+    let (window, workspace) = open(cx);
+    cx.update(|cx| {
+        let store = cx.stores().pull_requests().clone();
+        store.update(cx, |store, cx| store.load_detail(&featured(), cx));
+    });
+    cx.run_until_parked();
+    let (path, line) = cx.update(|cx| {
+        let store = cx.stores().pull_requests().read(cx);
+        let detail = store.loaded_detail(&featured()).unwrap();
+        let file = detail.files.iter().find(|f| !f.hunks.is_empty()).unwrap();
+        let line = file
+            .hunks
+            .iter()
+            .flat_map(|h| &h.lines)
+            .find_map(|l| l.new_line)
+            .unwrap();
+        (file.path.clone(), line)
+    });
+    let url = zed_bridge::SwitchfoldLink::Open {
+        key: featured(),
+        file: Some(path),
+        line: Some(line),
+    }
+    .to_url();
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| workspace.open_link(&url, window, cx))
+    })
+    .unwrap();
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(500));
+    cx.run_until_parked();
+    let composer = cx
+        .update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.try_find("line-comment-cancel").is_some()
+        })
+        .unwrap();
+    assert!(composer, "the link opens a comment composer on that line");
+}
+
+#[gpui_kit::test]
+fn zed_agent_drafts_pending_comments_but_cannot_post(cx: &mut TestAppContext) {
+    use app_state_ui::StoresExt as _;
+    use zed_bridge::mcp::{BridgeRequest, tool};
+    let (window, workspace) = open_featured(cx);
+    let ask = |request: BridgeRequest, cx: &mut TestAppContext| {
+        let task = cx
+            .update_window(window, |_, window, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.answer_zed(request, window, cx)
+                })
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.foreground_executor().block_test(task)
+    };
+    let threads = ask(BridgeRequest::new(tool::THREADS, serde_json::json!({})), cx);
+    assert!(!threads.is_error && threads.text.contains("thread_id"));
+
+    let (path, line) = cx.update(|cx| {
+        let store = cx.stores().pull_requests().read(cx);
+        let detail = store.loaded_detail(&featured()).unwrap();
+        let file = detail.files.iter().find(|f| !f.hunks.is_empty()).unwrap();
+        let line = file
+            .hunks
+            .iter()
+            .flat_map(|h| &h.lines)
+            .find_map(|l| l.new_line)
+            .unwrap();
+        (file.path.clone(), line)
+    });
+    let drafted = ask(
+        BridgeRequest::new(
+            tool::COMMENT,
+            serde_json::json!({ "path": path, "line": line, "body": "From Zed" }),
+        ),
+        cx,
+    );
+    assert!(!drafted.is_error, "{}", drafted.text);
+    let outside = ask(
+        BridgeRequest::new(
+            tool::COMMENT,
+            serde_json::json!({ "path": path, "line": 999_999, "body": "Nope" }),
+        ),
+        cx,
+    );
+    assert!(outside.is_error);
+    let pending = cx.update(|cx| {
+        cx.stores()
+            .pull_requests()
+            .read(cx)
+            .loaded_detail(&featured())
+            .unwrap()
+            .threads
+            .iter()
+            .flat_map(|t| &t.comments)
+            .any(|c| c.is_pending && c.body == "From Zed")
+    });
+    assert!(pending, "the comment waits in the pending review");
+    let other = ask(
+        BridgeRequest::new("submit_review", serde_json::json!({})),
+        cx,
+    );
+    assert!(other.is_error);
+}

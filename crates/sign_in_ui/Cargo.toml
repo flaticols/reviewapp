@@ -1,0 +1,15 @@
+[package]
+name = "sign_in_ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+gpui-kit.workspace = true
+github_api.workspace = true
+github_auth_ui.workspace = true
+theme_ui.workspace = true
+
+[lints]
+workspace = true

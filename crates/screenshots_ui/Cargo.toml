@@ -1,0 +1,29 @@
+[package]
+name = "screenshots_ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
+agent_review_ui.workspace = true
+acp_client.workspace = true
+pr_actions_ui.workspace = true
+app_state_ui.workspace = true
+anyhow.workspace = true
+check_log_ui.workspace = true
+fixtures.workspace = true
+pr_list_ui.workspace = true
+pr_model.workspace = true
+review_model.workspace = true
+review_thread_ui.workspace = true
+settings_model.workspace = true
+settings_ui.workspace = true
+submit_review_ui.workspace = true
+theme_ui.workspace = true
+widgets_ui.workspace = true
+workspace_ui.workspace = true
+
+[lints]
+workspace = true
