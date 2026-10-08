@@ -7,7 +7,9 @@ use crate::percent;
 /// The URL scheme Switchfold registers.
 pub const SCHEME: &str = "dev.switchfold.review";
 
-/// A `dev.switchfold.review://` link.
+/// A `dev.switchfold.review://` link. Any app or web page can open one, so links only
+/// navigate and open an empty composer: nothing that fetches, checks out, runs or
+/// posts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SwitchfoldLink {
     /// `comment?file=<absolute path>&line=<n>`: start a comment on that line of the pull
@@ -20,8 +22,6 @@ pub enum SwitchfoldLink {
         file: Option<String>,
         line: Option<u32>,
     },
-    /// `diff?pr=<owner/name#n>`: show the pull request's whole diff in Zed.
-    Diff { key: PullRequestKey },
 }
 
 impl SwitchfoldLink {
@@ -46,9 +46,6 @@ impl SwitchfoldLink {
                 file: param("file").filter(|file| !file.is_empty()),
                 line,
             }),
-            "diff" => Some(Self::Diff {
-                key: parse_key(&param("pr")?)?,
-            }),
             _ => None,
         }
     }
@@ -60,7 +57,6 @@ impl SwitchfoldLink {
                 "{SCHEME}://comment?file={}&line={line}",
                 percent::encode(&file.to_string_lossy(), false)
             ),
-            Self::Diff { key } => format!("{SCHEME}://diff?pr={}", encode_key(key)),
             Self::Open { key, file, line } => {
                 let mut url = format!("{SCHEME}://open?pr={}", encode_key(key));
                 if let Some(file) = file {
@@ -110,10 +106,6 @@ mod tests {
         let url = link.to_url();
         assert!(url.starts_with("dev.switchfold.review://open?pr=flaticols%2Fswitchfold%23482"));
         assert_eq!(SwitchfoldLink::parse(&url), Some(link));
-        let diff = SwitchfoldLink::Diff {
-            key: PullRequestKey::new(RepoSlug::new("flaticols", "switchfold"), 482),
-        };
-        assert_eq!(SwitchfoldLink::parse(&diff.to_url()), Some(diff));
     }
 
     #[test]
@@ -126,6 +118,11 @@ mod tests {
         assert_eq!(
             SwitchfoldLink::parse("dev.switchfold.review://delete"),
             None
+        );
+        assert_eq!(
+            SwitchfoldLink::parse("dev.switchfold.review://diff?pr=a%2Fb%231"),
+            None,
+            "links only navigate; anything that fetches or runs needs a click in the app"
         );
     }
 }

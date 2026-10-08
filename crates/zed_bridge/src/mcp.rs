@@ -118,8 +118,12 @@ impl BridgeListener {
             }
             std::fs::remove_file(path)?;
         }
+        let listener = UnixListener::bind(path)?;
+        // Only this user may talk to the app.
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
         Ok(Self {
-            listener: UnixListener::bind(path)?,
+            listener,
             path: path.to_path_buf(),
         })
     }
@@ -368,6 +372,11 @@ mod tests {
             .serve(|request| BridgeReply::ok(format!("got {}", request.tool)));
         let reply = call(&path, &BridgeRequest::new(tool::CURRENT, json!({})));
         assert_eq!(reply, BridgeReply::ok("got current_pull_request"));
+        use std::os::unix::fs::PermissionsExt as _;
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         assert!(
             BridgeListener::bind(&path).is_err(),
             "a second app can't take over a live socket"
