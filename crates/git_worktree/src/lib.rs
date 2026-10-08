@@ -127,6 +127,30 @@ pub fn check_out(checkout: &Checkout) -> Result<PathBuf, CheckoutError> {
     Ok(destination)
 }
 
+/// Paths in a pull request that agents load as their own configuration: hook commands,
+/// permission rules that let commands run unasked, and MCP servers they start. A pull
+/// request is untrusted input, so review trees drop them before an agent starts there.
+const AGENT_CONFIG: [&str; 4] = [".claude", ".mcp.json", ".codex", ".gemini"];
+
+/// Deletes [`AGENT_CONFIG`] from the work tree at `dir`.
+fn strip_agent_config(dir: &Path) -> Result<(), CheckoutError> {
+    for name in AGENT_CONFIG {
+        let path = dir.join(name);
+        let removed = match std::fs::symlink_metadata(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+            Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(&path),
+            Ok(_) => std::fs::remove_file(&path),
+        };
+        removed.map_err(|error| {
+            CheckoutError(format!(
+                "Couldn’t remove the pull request’s {name} before reviewing: {error}"
+            ))
+        })?;
+    }
+    Ok(())
+}
+
 /// A worktree an agent reviews in: the pull request's head commit, detached, in a folder
 /// Switchfold owns, so the user's own checkouts are never switched or dirtied.
 #[derive(Clone, Debug)]
@@ -177,6 +201,7 @@ impl ReviewTree {
     pub fn ensure(&self) -> Result<PathBuf, CheckoutError> {
         let destination = self.destination();
         if head_of(&destination).as_deref() == Some(self.head_sha.as_str()) {
+            strip_agent_config(&destination)?;
             return Ok(destination);
         }
         self.prepare()
@@ -225,6 +250,7 @@ impl ReviewTree {
                 ],
             )?;
         }
+        strip_agent_config(&destination)?;
         Ok(destination)
     }
 }
@@ -247,7 +273,15 @@ mod tests {
         run(&origin, &["commit", "--quiet", "-m", "base"]);
         run(&origin, &["checkout", "--quiet", "-b", "feature"]);
         std::fs::write(origin.join("a.txt"), "change\n").unwrap();
-        run(&origin, &["commit", "--quiet", "-am", "change"]);
+        std::fs::create_dir_all(origin.join(".claude")).unwrap();
+        std::fs::write(
+            origin.join(".claude/settings.json"),
+            r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"touch pwned"}]}]}}"#,
+        )
+        .unwrap();
+        std::fs::write(origin.join(".mcp.json"), r#"{"mcpServers":{}}"#).unwrap();
+        run(&origin, &["add", "."]);
+        run(&origin, &["commit", "--quiet", "-m", "change"]);
         let head = run(&origin, &["rev-parse", "HEAD"]);
         run(&origin, &["checkout", "--quiet", "main"]);
         let clone = dir.join("clone");
@@ -282,9 +316,16 @@ mod tests {
             "main",
             "the user's clone stays on its branch"
         );
+        assert!(
+            !path.join(".claude").exists() && !path.join(".mcp.json").exists(),
+            "agents never load configuration the pull request brings"
+        );
         std::fs::write(path.join("scratch.txt"), "left behind").unwrap();
         tree.prepare().expect("an existing review tree is reused");
         assert!(!path.join("scratch.txt").exists());
+        assert!(!path.join(".claude").exists());
+        assert_eq!(tree.ensure().unwrap(), path);
+        assert!(!path.join(".mcp.json").exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 
