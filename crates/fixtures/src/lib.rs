@@ -1,7 +1,10 @@
 //! Sample data reproducing the Sketch design's content, so the running app can be
 //! compared with the design frame by frame. Ages are relative to the `now` passed in.
 
+mod markdown;
 mod patches;
+
+pub use markdown::KITCHEN_SINK;
 
 use std::path::Path;
 

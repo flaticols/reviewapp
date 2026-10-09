@@ -58,6 +58,7 @@ agent-client-protocol = { version = "3", features = ["process"] }
 
 pr_model = { path = "crates/pr_model" }
 pr_cache = { path = "crates/pr_cache" }
+markdown_ui = { path = "crates/markdown_ui" }
 zed_bridge = { path = "crates/zed_bridge" }
 diff_model = { path = "crates/diff_model" }
 review_model = { path = "crates/review_model" }

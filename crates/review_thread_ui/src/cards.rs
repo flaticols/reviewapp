@@ -7,14 +7,13 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     h_flex,
     menu::{DropdownMenu as _, PopupMenu, PopupMenuItem},
-    text::TextView,
     v_flex,
 };
 use gpui_kit::{
     AnyElement, App, ClipboardItem, IntoElement, ParentElement as _, RenderOnce, SharedString,
     Styled as _, Window, div, prelude::FluentBuilder as _,
 };
-use pr_model::CheckStatus;
+use pr_model::{CheckStatus, RepoSlug};
 use review_model::{Actor, CheckRun, Commit};
 use theme_ui::TypographyExt as _;
 use widgets_ui::{ActorName, AvatarSize, CheckIcon, InitialsAvatar, StatusTag, Tone};
@@ -36,6 +35,7 @@ pub struct CommentCard {
     verb: SharedString,
     body: SharedString,
     is_pending: bool,
+    repo: Option<RepoSlug>,
     actions: Vec<AnyElement>,
 }
 
@@ -53,6 +53,7 @@ impl CommentCard {
             verb: verb.into(),
             body: body.into(),
             is_pending: false,
+            repo: None,
             actions: Vec::new(),
         }
     }
@@ -60,6 +61,12 @@ impl CommentCard {
     /// Marks the comment as part of the viewer's pending review.
     pub fn pending(mut self, is_pending: bool) -> Self {
         self.is_pending = is_pending;
+        self
+    }
+
+    /// Links `@login` and `#123` in the body the way GitHub does in `repo`.
+    pub fn repo(mut self, repo: RepoSlug) -> Self {
+        self.repo = Some(repo);
         self
     }
 
@@ -119,10 +126,10 @@ impl RenderOnce for CommentCard {
                     ),
             )
             .child(
-                div()
-                    .pl_8()
-                    .text_body()
-                    .child(TextView::markdown(self.id.clone(), self.body).selectable(true)),
+                div().pl_8().text_body().child(
+                    markdown_ui::github_markdown(self.id.clone(), &self.body, self.repo.as_ref())
+                        .selectable(true),
+                ),
             )
             .when(!self.actions.is_empty(), |this| {
                 this.child(h_flex().pl_6().gap_1().children(self.actions))

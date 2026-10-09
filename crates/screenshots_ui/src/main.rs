@@ -39,6 +39,8 @@ enum Scene {
     ThreadCodeFont,
     /// The thread in the Espresso dark and Islands Light palettes.
     ThreadEspresso,
+    /// A description using most of GitHub Flavored Markdown.
+    Markdown,
     /// The thread scrolled to its first file.
     ThreadFirstFile,
     Submit,
@@ -60,7 +62,7 @@ enum Scene {
 }
 
 impl Scene {
-    const ALL: [Scene; 24] = [
+    const ALL: [Scene; 25] = [
         Self::List,
         Self::OneCommit,
         Self::RowMenu,
@@ -71,6 +73,7 @@ impl Scene {
         Self::TitlePopover,
         Self::ThreadCodeFont,
         Self::ThreadEspresso,
+        Self::Markdown,
         Self::ThreadFirstFile,
         Self::Submit,
         Self::StartAgent,
@@ -99,6 +102,7 @@ impl Scene {
             Self::TitlePopover => "02e-title-popover",
             Self::ThreadCodeFont => "02c-thread-code-font",
             Self::ThreadEspresso => "02g-thread-palettes",
+            Self::Markdown => "02k-markdown",
             Self::ThreadFirstFile => "02d-thread-first-file",
             Self::Submit => "03-submit",
             Self::StartAgent => "05a-start-agent",
@@ -151,6 +155,21 @@ fn render(
             launch::sample_data(&home)
         };
         data.settings_path = None;
+        if scene == Scene::Markdown {
+            let mut sample = fixtures::sample(pr_model::Timestamp::now(), &home);
+            if let Some(detail) = sample
+                .details
+                .iter_mut()
+                .find(|detail| detail.summary.key == featured())
+            {
+                detail.body = fixtures::KITCHEN_SINK.into();
+                detail.timeline = vec![review_model::TimelineItem::Description];
+            }
+            data.source = Arc::new(github_api::FixtureSource::new(
+                sample.pull_requests,
+                sample.details,
+            ));
+        }
         if scene == Scene::SignIn {
             data.settings.accounts.clear();
         }
@@ -170,7 +189,13 @@ fn render(
 
     let workspace: Rc<RefCell<Option<Entity<Workspace>>>> = Rc::default();
     let built = workspace.clone();
-    let window = cx.open_window(size(px(1440.), px(900.)), move |window, cx| {
+    // The markdown sample is long; a tall window shows all of it.
+    let height = if scene == Scene::Markdown {
+        2000.
+    } else {
+        900.
+    };
+    let window = cx.open_window(size(px(1440.), px(height)), move |window, cx| {
         let view = cx.new(|cx| Workspace::new(window, cx));
         *built.borrow_mut() = Some(view.clone());
         cx.new(|cx| gpui_kit::base::Root::new(view, window, cx))
@@ -209,6 +234,7 @@ fn render(
                 | Scene::TitlePopover
                 | Scene::ThreadCodeFont
                 | Scene::ThreadEspresso
+                | Scene::Markdown
                 | Scene::ThreadFirstFile
                 | Scene::Submit
                 | Scene::StartAgent

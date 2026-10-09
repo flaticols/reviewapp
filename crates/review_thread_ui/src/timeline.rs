@@ -12,7 +12,6 @@ use gpui_kit::component::{
     menu::{DropdownMenu as _, PopupMenu, PopupMenuItem},
     notification::Notification,
     scroll::ScrollableElement as _,
-    text::TextView,
     v_flex,
 };
 use gpui_kit::{
@@ -230,6 +229,7 @@ impl ReviewThreadView {
                     format!("opened {}", detail.opened_at.long_age(now)),
                     detail.body.clone(),
                 )
+                .repo(self.key.repo().clone())
                 .action(
                     Button::new("description-reply")
                         .ghost()
@@ -338,6 +338,7 @@ impl ReviewThreadView {
                 format!("commented {}", comment.created_at.long_age(now)),
                 comment.body.clone(),
             )
+            .repo(self.key.repo().clone())
             .into_any_element(),
         }
     }
@@ -478,7 +479,8 @@ impl ReviewThreadView {
                 format!("commented {}", comment.created_at.long_age(now)),
                 comment.body.clone(),
             )
-            .pending(comment.is_pending);
+            .pending(comment.is_pending)
+            .repo(self.key.repo().clone());
             if ix == last {
                 let resolve_id = thread.id.clone();
                 let reply_focus = reply_input.clone();
@@ -748,9 +750,10 @@ impl ReviewThreadView {
                 None => div()
                     .pl_8()
                     .text_body()
-                    .child(TextView::markdown(
+                    .child(markdown_ui::github_markdown(
                         SharedString::from(format!("finding-body-{id}")),
-                        finding.body.clone(),
+                        &finding.body,
+                        Some(self.key.repo()),
                     ))
                     .into_any_element(),
             })

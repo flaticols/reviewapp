@@ -75,6 +75,11 @@ gpui_kit::assets::icon_assets!(
         UserPlus,
         Maximize2,
         Minimize2,
+        Info,
+        Lightbulb,
+        MessageSquareWarning,
+        TriangleAlert,
+        OctagonAlert,
     ]
 );
 

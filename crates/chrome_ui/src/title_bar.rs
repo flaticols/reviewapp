@@ -3,7 +3,7 @@ use std::rc::Rc;
 use app_state_ui::actions::ToggleSidebar;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, Selectable as _, Sizable as _, TitleBar,
+    ActiveTheme as _, Icon, Sizable as _, TitleBar,
     button::{Button, ButtonVariants as _},
     h_flex,
 };
@@ -120,8 +120,13 @@ impl RenderOnce for AppTitleBar {
                     Button::new("toggle-sidebar")
                         .ghost()
                         .small()
-                        .icon(IconName::PanelLeft)
-                        .selected(self.sidebar_open)
+                        .icon(
+                            Icon::new(IconName::PanelLeft).text_color(if self.sidebar_open {
+                                cx.theme().foreground
+                            } else {
+                                cx.theme().muted_foreground
+                            }),
+                        )
                         .tooltip_with_action(
                             if self.sidebar_open {
                                 "Hide the sidebar"

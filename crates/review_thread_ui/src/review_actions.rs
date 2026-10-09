@@ -2,7 +2,7 @@ use app_state_ui::StoresExt as _;
 use app_state_ui::actions::{SubmitReview, ToggleFocusMode, ToggleInspector};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, Selectable as _, Sizable as _, WindowExt as _,
+    ActiveTheme as _, Icon, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariant, ButtonVariants as _},
     h_flex,
     menu::{DropdownMenu as _, PopupMenu, PopupMenuItem},
@@ -131,6 +131,14 @@ impl RenderOnce for ReviewActions {
 /// Show or hide the right sidebar, and focus mode, which hides both sidebars.
 fn layout_buttons(cx: &App) -> impl IntoElement + use<> {
     let layout = crate::ReviewLayout::get(cx);
+    // On reads as full-strength ink, off as dimmed; neither gets a fill, as in Zed.
+    let toggle_icon = |icon: IconName, on: bool| {
+        Icon::new(icon).text_color(if on {
+            cx.theme().foreground
+        } else {
+            cx.theme().muted_foreground
+        })
+    };
     h_flex()
         .gap_0p5()
         .ml_1()
@@ -138,8 +146,7 @@ fn layout_buttons(cx: &App) -> impl IntoElement + use<> {
             Button::new("toggle-inspector")
                 .ghost()
                 .small()
-                .icon(IconName::PanelRight)
-                .selected(layout.inspector)
+                .icon(toggle_icon(IconName::PanelRight, layout.inspector))
                 .tooltip_with_action(
                     if layout.inspector {
                         "Hide the right sidebar"
@@ -155,12 +162,14 @@ fn layout_buttons(cx: &App) -> impl IntoElement + use<> {
             Button::new("toggle-focus")
                 .ghost()
                 .small()
-                .icon(if layout.is_focused() {
-                    IconName::Minimize2
-                } else {
-                    IconName::Maximize2
-                })
-                .selected(layout.is_focused())
+                .icon(toggle_icon(
+                    if layout.is_focused() {
+                        IconName::Minimize2
+                    } else {
+                        IconName::Maximize2
+                    },
+                    layout.is_focused(),
+                ))
                 .tooltip_with_action(
                     if layout.is_focused() {
                         "Leave focus mode"

@@ -6,7 +6,6 @@ use gpui_kit::component::{
     h_flex,
     progress::Progress,
     spinner::Spinner,
-    text::TextView,
     v_flex,
 };
 use gpui_kit::{
@@ -90,6 +89,7 @@ impl RenderOnce for AgentRunDetails {
             .collect();
         let hidden = run.activity().len().saturating_sub(ACTIVITY_SHOWN);
         let message = run.message().trim().to_string();
+        let repo = run.key().repo().clone();
         let thinking = (!run.state().is_over() && message.is_empty())
             .then(|| last_paragraph(run.thought()))
             .flatten();
@@ -165,9 +165,10 @@ impl RenderOnce for AgentRunDetails {
             .when(!message.is_empty(), |this| {
                 this.child(section(
                     "Reply",
-                    div().text_body().child(TextView::markdown(
+                    div().text_body().child(markdown_ui::github_markdown(
                         SharedString::from(format!("agent-reply-{id}")),
-                        message,
+                        &message,
+                        Some(&repo),
                     )),
                     cx,
                 ))

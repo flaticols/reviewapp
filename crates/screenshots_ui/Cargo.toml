@@ -14,6 +14,7 @@ app_state_ui.workspace = true
 anyhow.workspace = true
 check_log_ui.workspace = true
 fixtures.workspace = true
+github_api.workspace = true
 pr_list_ui.workspace = true
 pr_model.workspace = true
 review_model.workspace = true
