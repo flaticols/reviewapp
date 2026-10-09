@@ -18,8 +18,11 @@ struct Details {
 }
 
 /// `<details>` blocks, which the source pass rewrote as fences: a summary row that
-/// shows or hides the body.
-pub(crate) struct DetailsPlugin;
+/// shows or hides the body. `nesting` is how many alerts and details enclose this text
+/// view.
+pub(crate) struct DetailsPlugin {
+    pub(crate) nesting: usize,
+}
 
 impl MarkdownPlugin for DetailsPlugin {
     fn is_block(&self) -> bool {
@@ -38,6 +41,9 @@ impl MarkdownPlugin for DetailsPlugin {
         let markdown_ast::Node::Code(code) = node else {
             return None;
         };
+        if self.nesting >= crate::MAX_NESTING {
+            return None;
+        }
         let open = match code.lang.as_deref() {
             Some(DETAILS_LANG) => false,
             Some(DETAILS_OPEN_LANG) => true,
@@ -100,9 +106,10 @@ impl MarkdownPlugin for DetailsPlugin {
                     }),
             )
             .when(is_open, |this| {
-                this.child(v_flex().px_3().pb_2().child(crate::view(
+                this.child(v_flex().px_3().pb_2().child(crate::view_at(
                     SharedString::from(format!("details-body-{start}")),
                     details.body.clone(),
+                    self.nesting + 1,
                 )))
             })
             .into_any_element()

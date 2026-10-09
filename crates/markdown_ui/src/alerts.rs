@@ -8,10 +8,6 @@ use theme_ui::ActiveAppTheme as _;
 
 const NODE_NAME: &str = "github-alert";
 
-/// How many `>` markers deep alerts are still drawn; each level renders the next as
-/// its own text view, so unbounded nesting from a comment could exhaust the stack.
-const MAX_QUOTE_DEPTH: usize = 8;
-
 /// GitHub's five alert kinds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
@@ -63,7 +59,10 @@ struct Alert {
 }
 
 /// `> [!NOTE]` and its siblings: a block quote whose first line names the alert.
-pub(crate) struct AlertPlugin;
+/// `nesting` is how many alerts and details enclose this text view.
+pub(crate) struct AlertPlugin {
+    pub(crate) nesting: usize,
+}
 
 impl MarkdownPlugin for AlertPlugin {
     fn is_block(&self) -> bool {
@@ -82,6 +81,9 @@ impl MarkdownPlugin for AlertPlugin {
         let markdown_ast::Node::Blockquote(_) = node else {
             return None;
         };
+        if self.nesting >= crate::MAX_NESTING {
+            return None;
+        }
         let source = cx.node_source(node)?;
         let (kind, body) = parse_alert(source)?;
         Some(
@@ -126,7 +128,7 @@ impl MarkdownPlugin for AlertPlugin {
                     .child(Icon::new(alert.kind.icon()).small())
                     .child(alert.kind.label()),
             )
-            .child(crate::view(id, alert.body.clone()))
+            .child(crate::view_at(id, alert.body.clone(), self.nesting + 1))
             .into_any_element()
     }
 }
@@ -134,16 +136,6 @@ impl MarkdownPlugin for AlertPlugin {
 /// The alert kind and its body as Markdown, when `source` (a block quote, with its `>`
 /// markers) starts with an alert marker on a line of its own.
 fn parse_alert(source: &str) -> Option<(Kind, String)> {
-    let too_deep = source.lines().any(|line| {
-        line.chars()
-            .take_while(|c| *c == '>' || c.is_whitespace())
-            .filter(|c| *c == '>')
-            .count()
-            > MAX_QUOTE_DEPTH
-    });
-    if too_deep {
-        return None;
-    }
     let mut lines = source.lines().map(|line| {
         let trimmed = line.trim_start();
         match trimmed.strip_prefix('>') {
@@ -169,7 +161,5 @@ mod tests {
         assert!(parse_alert("> [!NOTE] inline text").is_none());
         assert!(parse_alert("> [!FOO]\n> x").is_none());
         assert!(parse_alert("> plain quote").is_none());
-        let deep = format!("> [!NOTE]\n{}x", "> ".repeat(20));
-        assert!(parse_alert(&deep).is_none());
     }
 }

@@ -5276,6 +5276,7 @@ dependencies = [
  "gpui-kit",
  "mermaid-rs-renderer",
  "pr_model",
+ "settings_model",
  "theme_ui",
 ]
 

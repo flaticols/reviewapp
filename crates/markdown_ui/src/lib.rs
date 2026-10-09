@@ -52,11 +52,26 @@ pub fn github_markdown(
     view(id, prepared)
 }
 
-/// A text view of already prepared Markdown, with Switchfold's block plugins. Alerts and
-/// details render their bodies through this too.
+/// How many alerts and details may nest inside each other. Each level is a text view
+/// inside the last, and the source is anyone's comment, so nesting is counted where it
+/// happens, while rendering, not guessed from the text.
+pub(crate) const MAX_NESTING: usize = 8;
+
+/// A text view of already prepared Markdown, with Switchfold's block plugins.
 pub(crate) fn view(id: impl Into<ElementId>, prepared: impl Into<SharedString>) -> TextView {
+    view_at(id, prepared, 0)
+}
+
+/// [`view`] for the body of an alert or details block `nesting` levels deep. Past
+/// [`MAX_NESTING`], alerts and details render as the plain quotes and code blocks they
+/// are written as.
+pub(crate) fn view_at(
+    id: impl Into<ElementId>,
+    prepared: impl Into<SharedString>,
+    nesting: usize,
+) -> TextView {
     TextView::markdown(id, prepared)
-        .plugin(alerts::AlertPlugin)
+        .plugin(alerts::AlertPlugin { nesting })
         .plugin(mermaid::MermaidPlugin)
-        .plugin(details::DetailsPlugin)
+        .plugin(details::DetailsPlugin { nesting })
 }
