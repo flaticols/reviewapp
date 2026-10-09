@@ -193,8 +193,8 @@ fn bordered(button: Button, border: gpui_kit::Hsla, text: gpui_kit::Hsla) -> But
         .text_color(text)
 }
 
-/// Approve: a neutral border until someone approves, then green with the approvers'
-/// avatars. Clicking opens a popover that lists who approved and asks to confirm;
+/// Approve: a neutral bordered button until someone approves, then bold green
+/// "Approved" without a frame, followed by the approvers' avatars. Clicking opens a popover that lists who approved and asks to confirm;
 /// approving again stays possible, since GitHub records each approval.
 fn approve_button(
     detail: &PullRequestDetail,
@@ -230,25 +230,49 @@ fn approve_button(
         .icon(IconName::Check)
         .label("Approve")
     } else {
-        let avatars = h_flex().children(approvers.iter().take(3).enumerate().map(|(ix, actor)| {
-            div()
-                .when(ix > 0, |this| this.ml(gpui_kit::px(-5.)))
-                .rounded_full()
-                .border_1()
-                .border_color(green)
-                .child(crate::cards::actor_avatar(actor, AvatarSize::Small))
-        }));
-        bordered(Button::new("approve"), green, green)
+        // Approved reads as a state, not a control: green bold text and the approvers'
+        // faces, no frame. Overlapping avatars get a ring in the bar's color so each
+        // stays distinct.
+        let ring = cx.theme().title_bar;
+        let shown = approvers.len().min(3);
+        let more = approvers.len() - shown;
+        let avatars = h_flex()
+            .children(approvers.iter().take(shown).enumerate().map(|(ix, actor)| {
+                div()
+                    .when(ix > 0, |this| this.ml(gpui_kit::px(-5.)))
+                    .rounded_full()
+                    .border_2()
+                    .border_color(ring)
+                    .child(crate::cards::actor_avatar(actor, AvatarSize::Small))
+            }))
+            .when(more > 0, |this| {
+                this.child(
+                    div()
+                        .ml_1()
+                        .text_meta()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!("+{more}")),
+                )
+            });
+        Button::new("approve")
+            .ghost()
             .small()
+            .tooltip(if viewer_approved {
+                "You approved this. Approve again…"
+            } else {
+                "Approve…"
+            })
             .child(
                 h_flex()
                     .gap_1p5()
-                    .child(Icon::new(IconName::Check).small())
-                    .child(if viewer_approved {
-                        "Approved"
-                    } else {
-                        "Approve"
-                    })
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .text_color(green)
+                            .font_weight(gpui_kit::FontWeight::BOLD)
+                            .child(Icon::new(IconName::Check).small())
+                            .child("Approved"),
+                    )
                     .child(avatars),
             )
     };
@@ -277,8 +301,10 @@ fn approve_button(
             let popover = cx.entity();
             let approve_view = view.clone();
             let approve_popover = popover.clone();
+            // The title bar's actions don't wrap, and the popover inherits that.
             v_flex()
                 .w(gpui_kit::rems(20.))
+                .whitespace_normal()
                 .gap_3()
                 .child(
                     v_flex()

@@ -4,8 +4,8 @@
 use gpui_kit::component::Root;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
-    AppContext as _, Context, IntoElement, ParentElement as _, Render, Styled as _,
-    TestAppContext, Window, div, px, size,
+    AppContext as _, Context, IntoElement, ParentElement as _, Render, Styled as _, TestAppContext,
+    Window, div, px, size,
 };
 
 struct Comment(String);
