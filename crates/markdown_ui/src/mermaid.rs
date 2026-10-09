@@ -11,6 +11,12 @@ use theme_ui::TypographyExt as _;
 
 const NODE_NAME: &str = "mermaid";
 
+/// The largest diagram source drawn. Layout cost grows quickly with size and comments
+/// come from anyone, so bigger ones show as source.
+const MAX_SOURCE_BYTES: usize = 16 * 1024;
+/// The largest drawing kept, in points, so one diagram can't ask for a huge texture.
+const MAX_DRAWING_SIDE: f32 = 6000.;
+
 /// One drawing of a diagram, at its natural size in points.
 #[derive(Clone, Debug)]
 struct Drawing {
@@ -112,6 +118,12 @@ impl MarkdownPlugin for MermaidPlugin {
 /// Draws `source` with `theme` on a transparent background, so it sits on whatever
 /// the comment does.
 fn draw(source: &str, mut theme: Theme) -> Result<Drawing, String> {
+    if source.len() > MAX_SOURCE_BYTES {
+        return Err(format!(
+            "it’s longer than {} KB, the most Switchfold draws",
+            MAX_SOURCE_BYTES / 1024
+        ));
+    }
     theme.background = "transparent".into();
     let options = RenderOptions {
         theme,
@@ -120,6 +132,12 @@ fn draw(source: &str, mut theme: Theme) -> Result<Drawing, String> {
     let svg =
         render_with_options(source, options).map_err(|error| first_line(&error.to_string()))?;
     let (width, height) = natural_size(&svg).ok_or("the drawing has no size")?;
+    if !(width.is_finite() && height.is_finite())
+        || width > MAX_DRAWING_SIDE
+        || height > MAX_DRAWING_SIDE
+    {
+        return Err("it’s too large to draw".into());
+    }
     Ok(Drawing {
         image: Arc::new(Image::from_bytes(ImageFormat::Svg, svg.into_bytes())),
         width,
@@ -154,6 +172,8 @@ mod tests {
         let svg = String::from_utf8(drawing.image.bytes.clone()).unwrap();
         assert!(svg.contains("Start") && !svg.contains("foreignObject"));
         assert!(draw("zzz", Theme::modern()).is_err());
+        let huge = format!("flowchart LR\n{}", "  A --> B\n".repeat(3000));
+        assert!(draw(&huge, Theme::modern()).is_err());
         assert!(draw("graph TD\n A-->", Theme::modern()).is_err());
     }
 }

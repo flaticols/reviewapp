@@ -283,7 +283,8 @@ pub(crate) fn apply_chrome(colors: &mut ThemeColor, palette: Palette) {
     colors.table_active_border = c.primary;
     colors.table_hover = c.subtle;
     colors.progress_bar = c.primary;
-    colors.switch = c.primary;
+    // The off track; the on track takes the primary color on its own.
+    colors.switch = c.pressed;
     colors.slider_bar = c.primary;
     colors.slider_thumb = c.on_primary;
     colors.skeleton = c.hover;

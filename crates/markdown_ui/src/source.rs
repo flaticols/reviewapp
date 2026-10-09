@@ -8,6 +8,10 @@ use pr_model::RepoSlug;
 pub(crate) const DETAILS_LANG: &str = "switchfold-details";
 pub(crate) const DETAILS_OPEN_LANG: &str = "switchfold-details-open";
 
+/// How deep `<details>` blocks nest before inner ones stay as written. Text comes from
+/// anyone who can comment, so nesting must not be able to exhaust the stack.
+const MAX_DETAILS_DEPTH: usize = 8;
+
 /// Rewrites what GitHub renders but CommonMark doesn't:
 /// - HTML comments disappear, as in pull request templates.
 /// - `<details>` blocks become fences the details renderer draws as a disclosure.
@@ -15,6 +19,10 @@ pub(crate) const DETAILS_OPEN_LANG: &str = "switchfold-details-open";
 /// - `:shortcode:` becomes its emoji.
 /// - With `repo`, `@login` and `#123` become links, as GitHub autolinks them.
 pub(crate) fn prepare(source: &str, repo: Option<&RepoSlug>) -> String {
+    prepare_at(source, repo, 0)
+}
+
+fn prepare_at(source: &str, repo: Option<&RepoSlug>, depth: usize) -> String {
     let source = strip_comments(source);
     let mut out = String::with_capacity(source.len());
     let lines: Vec<&str> = source.split_inclusive('\n').collect();
@@ -36,8 +44,9 @@ pub(crate) fn prepare(source: &str, repo: Option<&RepoSlug>) -> String {
             ix += 1;
             continue;
         }
-        if starts_details(line)
-            && let Some((consumed, rewritten)) = details_block(&lines[ix..], repo)
+        if depth < MAX_DETAILS_DEPTH
+            && starts_details(line)
+            && let Some((consumed, rewritten)) = details_block(&lines[ix..], repo, depth)
         {
             out.push_str(&rewritten);
             ix += consumed;
@@ -189,14 +198,14 @@ fn starts_details(line: &str) -> bool {
 
 /// Rewrites the `<details>` block at the start of `lines` as a fence, returning how
 /// many lines it used. `None` when it never closes, which leaves it as written.
-fn details_block(lines: &[&str], repo: Option<&RepoSlug>) -> Option<(usize, String)> {
-    let mut depth = 0usize;
+fn details_block(lines: &[&str], repo: Option<&RepoSlug>, depth: usize) -> Option<(usize, String)> {
+    let mut open_tags = 0usize;
     let mut end = None;
     for (ix, line) in lines.iter().enumerate() {
         let lower = line.to_ascii_lowercase();
-        depth += lower.matches("<details").count();
-        depth = depth.saturating_sub(lower.matches("</details>").count());
-        if depth == 0 {
+        open_tags += lower.matches("<details").count();
+        open_tags = open_tags.saturating_sub(lower.matches("</details>").count());
+        if open_tags == 0 {
             end = Some(ix);
             break;
         }
@@ -219,7 +228,16 @@ fn details_block(lines: &[&str], repo: Option<&RepoSlug>) -> Option<(usize, Stri
         inner_start = text_end + "</summary>".len();
     }
     let inner_end = lower.rfind("</details>")?;
-    let inner = prepare(block[inner_start..inner_end].trim_matches('\n'), repo);
+    // Out-of-order tags, such as `</summary>` after `</details>`, leave the block as
+    // written rather than slicing backwards.
+    if inner_start > inner_end {
+        return None;
+    }
+    let inner = prepare_at(
+        block[inner_start..inner_end].trim_matches('\n'),
+        repo,
+        depth + 1,
+    );
     let longest = inner
         .lines()
         .filter_map(|line| {
@@ -537,6 +555,44 @@ mod tests {
         assert_eq!(
             prepare("<details>\nnever closed\n", None),
             "<details>\nnever closed\n"
+        );
+    }
+
+    #[test]
+    fn hostile_input_neither_panics_nor_recurses_without_bound() {
+        let tricky = [
+            "<details><summary>a</details></summary>",
+            "<details><summary>a</summary></details></summary>x",
+            "<details>\n<summary>é</summary>\n</details>",
+            "<summary></summary><details>",
+            "<kbd>é</kbd><sub>ü</sub><sup>",
+            "<",
+            "<k",
+            "<kbd>",
+            "`",
+            "```",
+            "~~~~~\n<details>",
+            "<!--",
+            "-->",
+            ":",
+            "::",
+            "@",
+            "#",
+            "[](",
+            "]((",
+            "h",
+            "http",
+            "é@x #1 :ok:",
+        ];
+        for text in tricky {
+            prepare(text, Some(&repo()));
+            prepare(&format!("{text}\n{text}\n"), Some(&repo()));
+        }
+        let nested = "<details>\n".repeat(5000) + &"</details>\n".repeat(5000);
+        let out = prepare(&nested, None);
+        assert!(
+            out.contains("<details>"),
+            "past the limit, blocks stay as written"
         );
     }
 

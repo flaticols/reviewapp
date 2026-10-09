@@ -8,6 +8,10 @@ use theme_ui::ActiveAppTheme as _;
 
 const NODE_NAME: &str = "github-alert";
 
+/// How many `>` markers deep alerts are still drawn; each level renders the next as
+/// its own text view, so unbounded nesting from a comment could exhaust the stack.
+const MAX_QUOTE_DEPTH: usize = 8;
+
 /// GitHub's five alert kinds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
@@ -130,6 +134,16 @@ impl MarkdownPlugin for AlertPlugin {
 /// The alert kind and its body as Markdown, when `source` (a block quote, with its `>`
 /// markers) starts with an alert marker on a line of its own.
 fn parse_alert(source: &str) -> Option<(Kind, String)> {
+    let too_deep = source.lines().any(|line| {
+        line.chars()
+            .take_while(|c| *c == '>' || c.is_whitespace())
+            .filter(|c| *c == '>')
+            .count()
+            > MAX_QUOTE_DEPTH
+    });
+    if too_deep {
+        return None;
+    }
     let mut lines = source.lines().map(|line| {
         let trimmed = line.trim_start();
         match trimmed.strip_prefix('>') {
@@ -155,5 +169,7 @@ mod tests {
         assert!(parse_alert("> [!NOTE] inline text").is_none());
         assert!(parse_alert("> [!FOO]\n> x").is_none());
         assert!(parse_alert("> plain quote").is_none());
+        let deep = format!("> [!NOTE]\n{}x", "> ".repeat(20));
+        assert!(parse_alert(&deep).is_none());
     }
 }
