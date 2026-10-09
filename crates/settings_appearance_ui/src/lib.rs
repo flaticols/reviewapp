@@ -1,5 +1,5 @@
-//! Settings › Appearance: light, dark or system theme, the dark palette, interface
-//! size, and the font and size used for code.
+//! Settings › Appearance: light, dark or system theme, the light and dark palettes,
+//! interface size, and the font and size used for code.
 
 use app_state_ui::StoresExt as _;
 use gpui_kit::component::{
@@ -12,12 +12,14 @@ use gpui_kit::{
     Styled as _, Subscription, Window, div, rems,
 };
 use settings_model::{
-    Appearance, CODE_FONT_SIZES, DEFAULT_FONT_SIZE, DarkTheme, FONT_SIZES, Preferences,
+    Appearance, CODE_FONT_SIZES, DEFAULT_FONT_SIZE, DarkTheme, FONT_SIZES, LightTheme, Preferences,
 };
 use widgets_ui::{SettingsPage, SettingsRow, SettingsSection};
 
 /// The Appearance page.
 pub struct AppearancePage {
+    light_theme: Entity<SelectState<Vec<SharedString>>>,
+    dark_theme: Entity<SelectState<Vec<SharedString>>>,
     size: Entity<SelectState<Vec<SharedString>>>,
     code_font: Entity<SelectState<Vec<SharedString>>>,
     code_size: Entity<SelectState<Vec<SharedString>>>,
@@ -104,6 +106,32 @@ impl AppearancePage {
         let code_font = cx.new(|cx| {
             SelectState::new(fonts, font_ix.map(IndexPath::new), window, cx).searchable(true)
         });
+        let light_theme = cx.new(|cx| {
+            SelectState::new(
+                LightTheme::ALL
+                    .map(|theme| SharedString::from(theme.label()))
+                    .to_vec(),
+                LightTheme::ALL
+                    .iter()
+                    .position(|theme| *theme == preferences.light_theme)
+                    .map(IndexPath::new),
+                window,
+                cx,
+            )
+        });
+        let dark_theme = cx.new(|cx| {
+            SelectState::new(
+                DarkTheme::ALL
+                    .map(|theme| SharedString::from(theme.label()))
+                    .to_vec(),
+                DarkTheme::ALL
+                    .iter()
+                    .position(|theme| *theme == preferences.dark_theme)
+                    .map(IndexPath::new),
+                window,
+                cx,
+            )
+        });
         let sizes: Vec<Option<f32>> = std::iter::once(None)
             .chain(CODE_FONT_SIZES.iter().copied().map(Some))
             .collect();
@@ -120,6 +148,35 @@ impl AppearancePage {
         });
         let subscriptions = vec![
             cx.observe(&settings, |_, _, cx| cx.notify()),
+            cx.subscribe_in(
+                &light_theme,
+                window,
+                |_, _, event: &SelectEvent<Vec<SharedString>>, window, cx| {
+                    let SelectEvent::Confirm(Some(label)) = event else {
+                        return;
+                    };
+                    if let Some(theme) =
+                        LightTheme::ALL.iter().find(|t| t.label() == label.as_ref())
+                    {
+                        let theme = *theme;
+                        update_look(window, cx, |p| p.light_theme = theme);
+                    }
+                },
+            ),
+            cx.subscribe_in(
+                &dark_theme,
+                window,
+                |_, _, event: &SelectEvent<Vec<SharedString>>, window, cx| {
+                    let SelectEvent::Confirm(Some(label)) = event else {
+                        return;
+                    };
+                    if let Some(theme) = DarkTheme::ALL.iter().find(|t| t.label() == label.as_ref())
+                    {
+                        let theme = *theme;
+                        update_look(window, cx, |p| p.dark_theme = theme);
+                    }
+                },
+            ),
             cx.subscribe_in(
                 &size,
                 window,
@@ -163,6 +220,8 @@ impl AppearancePage {
             ),
         ];
         Self {
+            light_theme,
+            dark_theme,
             size,
             code_font,
             code_size,
@@ -198,20 +257,21 @@ impl Render for AppearancePage {
                         ),
                 )
                 .row(
+                    SettingsRow::new("Light theme")
+                        .description("The palette light mode uses, in the window and in code.")
+                        .trailing(
+                            div()
+                                .w(rems(11.25))
+                                .child(Select::new(&self.light_theme).small()),
+                        ),
+                )
+                .row(
                     SettingsRow::new("Dark theme")
                         .description("The palette dark mode uses, in the window and in code.")
                         .trailing(
-                            RadioGroup::horizontal("dark-theme")
-                                .children(DarkTheme::ALL.map(|theme| theme.label()))
-                                .selected_index(
-                                    DarkTheme::ALL
-                                        .iter()
-                                        .position(|theme| *theme == preferences.dark_theme),
-                                )
-                                .on_change(|ix, window, cx| {
-                                    let theme = DarkTheme::ALL[*ix];
-                                    update_look(window, cx, |p| p.dark_theme = theme);
-                                }),
+                            div()
+                                .w(rems(11.25))
+                                .child(Select::new(&self.dark_theme).small()),
                         ),
                 )
                 .row(

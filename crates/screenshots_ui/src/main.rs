@@ -37,7 +37,7 @@ enum Scene {
     TitlePopover,
     /// The thread with a picked code font and size.
     ThreadCodeFont,
-    /// The thread in the Espresso dark palette.
+    /// The thread in the Espresso dark and Islands Light palettes.
     ThreadEspresso,
     /// The thread scrolled to its first file.
     ThreadFirstFile,
@@ -98,7 +98,7 @@ impl Scene {
             Self::RequestReview => "03c-request-review",
             Self::TitlePopover => "02e-title-popover",
             Self::ThreadCodeFont => "02c-thread-code-font",
-            Self::ThreadEspresso => "02g-thread-espresso",
+            Self::ThreadEspresso => "02g-thread-palettes",
             Self::ThreadFirstFile => "02d-thread-first-file",
             Self::Submit => "03-submit",
             Self::StartAgent => "05a-start-agent",
@@ -159,6 +159,7 @@ fn render(
         look.appearance = appearance;
         if scene == Scene::ThreadEspresso {
             look.dark_theme = settings_model::DarkTheme::Espresso;
+            look.light_theme = settings_model::LightTheme::IslandsLight;
         }
         if scene == Scene::ThreadCodeFont {
             look.code_font_family = Some("Courier New".into());

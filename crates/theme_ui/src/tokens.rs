@@ -1,6 +1,6 @@
 use gpui_kit::component::ThemeColor;
 use gpui_kit::{Hsla, Rgba};
-use settings_model::DarkTheme;
+use settings_model::{DarkTheme, LightTheme};
 
 /// Colors the Foundations page defines on top of gpui-kit's Default theme. Built-in
 /// roles (background, muted, success, list-active…) are read from `cx.theme()`.
@@ -124,38 +124,107 @@ impl AppTheme {
         }
     }
 
-    /// Tokens for light mode, from "Color tokens — Light".
-    pub fn light() -> Self {
-        Self {
-            merged: hex(0x9333eaff),
-            accent: hex(0x0969daff),
-            diff_add: hex(0x22c55e1f),
-            diff_add_strong: hex(0x22c55e47),
-            diff_del: hex(0xef44441f),
-            diff_del_strong: hex(0xef444447),
-            diff_hunk: hex(0x3b82f614),
-            syntax_keyword: hex(0x9333eaff),
-            syntax_string: hex(0x15803dff),
-            syntax_function: hex(0x2563ebff),
-            syntax_type: hex(0xa16207ff),
-            syntax_comment: hex(0xa3a3a3ff),
-            syntax_number: hex(0x0e7490ff),
-            overlay: hex(0x00000033),
-            shadow: hex(0x0000001f),
-            approve: hex(0x1f883dff),
-            approve_hover: hex(0x1c8139ff),
-            approve_active: hex(0x197935ff),
+    /// Tokens for light mode in `theme`.
+    pub fn light(theme: LightTheme) -> Self {
+        match theme {
+            LightTheme::GitHub => Self {
+                merged: hex(0x9333eaff),
+                accent: hex(0x0969daff),
+                diff_add: hex(0x22c55e1f),
+                diff_add_strong: hex(0x22c55e47),
+                diff_del: hex(0xef44441f),
+                diff_del_strong: hex(0xef444447),
+                diff_hunk: hex(0x3b82f614),
+                syntax_keyword: hex(0x9333eaff),
+                syntax_string: hex(0x15803dff),
+                syntax_function: hex(0x2563ebff),
+                syntax_type: hex(0xa16207ff),
+                syntax_comment: hex(0xa3a3a3ff),
+                syntax_number: hex(0x0e7490ff),
+                overlay: hex(0x00000033),
+                shadow: hex(0x0000001f),
+                approve: hex(0x1f883dff),
+                approve_hover: hex(0x1c8139ff),
+                approve_active: hex(0x197935ff),
+            },
+            LightTheme::IslandsLight => Self {
+                merged: hex(0x871094ff),
+                accent: hex(0x3574f0ff),
+                diff_add: hex(0x3696501f),
+                diff_add_strong: hex(0x36965040),
+                diff_del: hex(0xe55b5b1f),
+                diff_del_strong: hex(0xe55b5b40),
+                diff_hunk: hex(0x3574f014),
+                syntax_keyword: hex(0x0033b3ff),
+                syntax_string: hex(0x067d17ff),
+                syntax_function: hex(0x00627aff),
+                syntax_type: hex(0x008080ff),
+                syntax_comment: hex(0x8c8c8cff),
+                syntax_number: hex(0x1750ebff),
+                overlay: hex(0x00000033),
+                shadow: hex(0x0000001f),
+                approve: hex(0x369650ff),
+                approve_hover: hex(0x2f8746ff),
+                approve_active: hex(0x29783dff),
+            },
+            LightTheme::OneLight => Self {
+                merged: hex(0xa626a4ff),
+                accent: hex(0x4078f2ff),
+                diff_add: hex(0x50a14f1f),
+                diff_add_strong: hex(0x50a14f40),
+                diff_del: hex(0xe456491f),
+                diff_del_strong: hex(0xe4564940),
+                diff_hunk: hex(0x4078f214),
+                syntax_keyword: hex(0xa626a4ff),
+                syntax_string: hex(0x50a14fff),
+                syntax_function: hex(0x4078f2ff),
+                syntax_type: hex(0xc18401ff),
+                syntax_comment: hex(0xa0a1a7ff),
+                syntax_number: hex(0x986801ff),
+                overlay: hex(0x00000033),
+                shadow: hex(0x0000001f),
+                approve: hex(0x50a14fff),
+                approve_hover: hex(0x468f45ff),
+                approve_active: hex(0x3d7d3cff),
+            },
+            LightTheme::SolarizedLight => Self {
+                merged: hex(0x6c71c4ff),
+                accent: hex(0x268bd2ff),
+                diff_add: hex(0x8599001f),
+                diff_add_strong: hex(0x85990040),
+                diff_del: hex(0xdc322f1f),
+                diff_del_strong: hex(0xdc322f40),
+                diff_hunk: hex(0x268bd214),
+                syntax_keyword: hex(0x859900ff),
+                syntax_string: hex(0x2aa198ff),
+                syntax_function: hex(0x268bd2ff),
+                syntax_type: hex(0xb58900ff),
+                syntax_comment: hex(0x93a1a1ff),
+                syntax_number: hex(0xd33682ff),
+                overlay: hex(0x00000033),
+                shadow: hex(0x0000001f),
+                approve: hex(0x859900ff),
+                approve_hover: hex(0x748500ff),
+                approve_active: hex(0x637200ff),
+            },
         }
     }
 }
 
+/// The palette one appearance uses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Palette {
+    Light(LightTheme),
+    Dark(DarkTheme),
+}
+
 /// Switchfold's chrome on top of gpui-kit's neutral Default theme: the sidebar and bars
 /// a step off the background, and one accent for primary actions, focus, links,
-/// selection and progress. `dark` picks the dark palette; `None` is light mode.
-pub(crate) fn apply_chrome(colors: &mut ThemeColor, dark: Option<DarkTheme>) {
-    let c = match dark {
-        Some(theme) => Chrome::dark(theme),
-        None => Chrome::light(),
+/// selection and progress.
+pub(crate) fn apply_chrome(colors: &mut ThemeColor, palette: Palette) {
+    let c = match palette {
+        Palette::Light(theme) => Chrome::light(theme),
+        Palette::Dark(theme) => Chrome::dark(theme),
     };
     if let Some([success, danger, warning, info]) = c.status {
         colors.success = success;
@@ -249,26 +318,105 @@ struct Chrome {
 }
 
 impl Chrome {
-    fn light() -> Self {
-        Self {
-            background: hex(0xffffffff),
-            foreground: hex(0x1f2328ff),
-            muted_foreground: hex(0x59636eff),
-            chrome: hex(0xf6f8faff),
-            subtle: hex(0xf6f8faff),
-            raised: hex(0xffffffff),
-            hover: hex(0xeef1f4ff),
-            pressed: hex(0xe1e6ebff),
-            border: hex(0xd1d9e0ff),
-            primary: hex(0x0969daff),
-            primary_hover: hex(0x0860caff),
-            primary_active: hex(0x0757baff),
-            on_primary: hex(0xffffffff),
-            link: hex(0x0969daff),
-            selection: hex(0x0969da33),
-            selected: hex(0xddf4ffff),
-            scrollbar: hex(0x8c959f66),
-            status: None,
+    fn light(theme: LightTheme) -> Self {
+        match theme {
+            LightTheme::GitHub => Self {
+                background: hex(0xffffffff),
+                foreground: hex(0x1f2328ff),
+                muted_foreground: hex(0x59636eff),
+                chrome: hex(0xf6f8faff),
+                subtle: hex(0xf6f8faff),
+                raised: hex(0xffffffff),
+                hover: hex(0xeef1f4ff),
+                pressed: hex(0xe1e6ebff),
+                border: hex(0xd1d9e0ff),
+                primary: hex(0x0969daff),
+                primary_hover: hex(0x0860caff),
+                primary_active: hex(0x0757baff),
+                on_primary: hex(0xffffffff),
+                link: hex(0x0969daff),
+                selection: hex(0x0969da33),
+                selected: hex(0xddf4ffff),
+                scrollbar: hex(0x8c959f66),
+                status: None,
+            },
+            // Content stays white; the window frame, sidebar and bars take the panel
+            // grey, as JetBrains' islands do.
+            LightTheme::IslandsLight => Self {
+                background: hex(0xffffffff),
+                foreground: hex(0x000000ff),
+                muted_foreground: hex(0x6c707eff),
+                chrome: hex(0xf7f8faff),
+                subtle: hex(0xf7f8faff),
+                raised: hex(0xffffffff),
+                hover: hex(0xdfe1e5ff),
+                pressed: hex(0xd3d5dbff),
+                border: hex(0xebecf0ff),
+                primary: hex(0x3574f0ff),
+                primary_hover: hex(0x3369d6ff),
+                primary_active: hex(0x315fbdff),
+                on_primary: hex(0xffffffff),
+                link: hex(0x2e55a3ff),
+                selection: hex(0xa6d2ff99),
+                selected: hex(0xd5e1ffff),
+                scrollbar: hex(0x8c8c8c66),
+                status: Some([
+                    hex(0x369650ff),
+                    hex(0xe55b5bff),
+                    hex(0xc27d04ff),
+                    hex(0x3574f0ff),
+                ]),
+            },
+            LightTheme::OneLight => Self {
+                background: hex(0xfafafaff),
+                foreground: hex(0x383a42ff),
+                muted_foreground: hex(0x696c77ff),
+                chrome: hex(0xeaeaebff),
+                subtle: hex(0xf0f0f1ff),
+                raised: hex(0xffffffff),
+                hover: hex(0xe5e5e6ff),
+                pressed: hex(0xdbdbdcff),
+                border: hex(0xdbdbdcff),
+                primary: hex(0x4078f2ff),
+                primary_hover: hex(0x3a6cdaff),
+                primary_active: hex(0x3360c2ff),
+                on_primary: hex(0xffffffff),
+                link: hex(0x4078f2ff),
+                selection: hex(0x4078f233),
+                selected: hex(0xdfe6f8ff),
+                scrollbar: hex(0x696c7766),
+                status: Some([
+                    hex(0x50a14fff),
+                    hex(0xe45649ff),
+                    hex(0xc18401ff),
+                    hex(0x0184bcff),
+                ]),
+            },
+            LightTheme::SolarizedLight => Self {
+                background: hex(0xfdf6e3ff),
+                foreground: hex(0x586e75ff),
+                muted_foreground: hex(0x839496ff),
+                chrome: hex(0xeee8d5ff),
+                subtle: hex(0xf5efdcff),
+                raised: hex(0xfdf6e3ff),
+                hover: hex(0xe8e1cbff),
+                pressed: hex(0xddd6c1ff),
+                border: hex(0xddd6c1ff),
+                primary: hex(0x268bd2ff),
+                primary_hover: hex(0x227dbdff),
+                primary_active: hex(0x1e6fa8ff),
+                on_primary: hex(0xfdf6e3ff),
+                link: hex(0x268bd2ff),
+                selection: hex(0x268bd233),
+                selected: hex(0xe4e4d4ff),
+                scrollbar: hex(0x93a1a166),
+                status: Some([
+                    hex(0x859900ff),
+                    hex(0xdc322fff),
+                    hex(0xb58900ff),
+                    hex(0x268bd2ff),
+                ]),
+            },
         }
     }
 

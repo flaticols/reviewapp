@@ -346,6 +346,40 @@ impl DarkTheme {
     }
 }
 
+/// The palette light mode uses.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LightTheme {
+    /// GitHub's light default.
+    #[default]
+    GitHub,
+    /// JetBrains' Islands Light: white content on cool grey panels.
+    IslandsLight,
+    /// Atom's One Light.
+    OneLight,
+    /// Ethan Schoonover's Solarized Light.
+    SolarizedLight,
+}
+
+impl LightTheme {
+    /// Every option in menu order.
+    pub const ALL: [LightTheme; 4] = [
+        Self::GitHub,
+        Self::IslandsLight,
+        Self::OneLight,
+        Self::SolarizedLight,
+    ];
+
+    /// The option label.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::GitHub => "GitHub Light",
+            Self::IslandsLight => "Islands Light",
+            Self::OneLight => "One Light",
+            Self::SolarizedLight => "Solarized Light",
+        }
+    }
+}
+
 /// Every persisted preference.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -362,6 +396,7 @@ pub struct Preferences {
     pub appearance: Appearance,
     /// The palette dark mode uses.
     pub dark_theme: DarkTheme,
+    pub light_theme: LightTheme,
     /// Base font size in points; the whole interface scales with it.
     pub font_size: f32,
     /// Font for code, diffs, paths and hashes; `None` uses the theme's monospace font.
@@ -386,6 +421,7 @@ impl Default for Preferences {
             open_files_at: OpenFilesAt::PullRequestHead,
             appearance: Appearance::System,
             dark_theme: DarkTheme::IslandsDark,
+            light_theme: LightTheme::GitHub,
             font_size: DEFAULT_FONT_SIZE,
             code_font_family: None,
             code_font_size: None,

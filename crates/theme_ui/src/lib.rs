@@ -14,7 +14,7 @@ use gpui_kit::component::{ActiveTheme as _, Theme, ThemeMode};
 use gpui_kit::{App, Global, Pixels, Point, SharedString, Window, WindowAppearance, point, px};
 use settings_model::{Appearance, Preferences};
 
-pub use settings_model::DarkTheme;
+pub use settings_model::{DarkTheme, LightTheme};
 pub use tokens::AppTheme;
 pub use typography::{TypographyExt, code_line_height};
 
@@ -51,10 +51,14 @@ pub fn apply(preferences: &Preferences, window: Option<&mut Window>, cx: &mut Ap
         .unwrap_or_else(|| cx.window_appearance());
     let mode = resolve_mode(preferences.appearance, system);
     Theme::change(mode, None, cx);
-    let dark = mode.is_dark().then_some(preferences.dark_theme);
-    let tokens = match dark {
-        Some(theme) => AppTheme::dark(theme),
-        None => AppTheme::light(),
+    let palette = if mode.is_dark() {
+        tokens::Palette::Dark(preferences.dark_theme)
+    } else {
+        tokens::Palette::Light(preferences.light_theme)
+    };
+    let tokens = match palette {
+        tokens::Palette::Dark(theme) => AppTheme::dark(theme),
+        tokens::Palette::Light(theme) => AppTheme::light(theme),
     };
     let font_size = preferences.font_size;
     let default_family = cx.theme().mono_font_family.clone();
@@ -67,7 +71,7 @@ pub fn apply(preferences: &Preferences, window: Option<&mut Window>, cx: &mut Ap
     // `Theme::change` reloads the registered theme, so the overrides go in a second
     // update afterwards, as `Theme::update` documents.
     Theme::update(cx, |theme| {
-        tokens::apply_chrome(&mut theme.colors, dark);
+        tokens::apply_chrome(&mut theme.colors, palette);
         // Success buttons are the green Approve: solid, like GitHub's.
         theme.button_success = tokens.approve;
         theme.button_success_hover = tokens.approve_hover;
