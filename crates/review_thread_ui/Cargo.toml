@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+github_api.workspace = true
 triage.workspace = true
 triage_ui.workspace = true
 markdown_ui.workspace = true

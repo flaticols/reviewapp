@@ -586,6 +586,24 @@ fn thread_view_detail(summary: PullRequest, now: Timestamp) -> PullRequestDetail
         "Consider documenting the collapse threshold as a setting.",
     );
     dismissed.state = FindingState::Dismissed;
+    let mut merge = review_model::MergeInfo::new(
+        "PR_sample_482",
+        detail
+            .commits
+            .last()
+            .map(|commit| commit.sha.clone())
+            .unwrap_or_default(),
+        review_model::MergeState::Clean,
+        vec![
+            review_model::MergeMethod::Merge,
+            review_model::MergeMethod::Squash,
+            review_model::MergeMethod::Rebase,
+        ],
+    );
+    merge.default_method = Some(review_model::MergeMethod::Squash);
+    merge.can_enable_auto_merge = true;
+    merge.deletes_branch = true;
+    detail.merge = Some(merge);
     detail.findings = vec![
         AgentFinding::new(
             "finding-hunk-31",

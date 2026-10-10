@@ -25,6 +25,8 @@ enum Scene {
     Thread,
     /// The Approve confirmation popover.
     ApprovePopover,
+    /// The merge panel, open from the title bar.
+    MergePopover,
     /// A pull request row's context menu.
     RowMenu,
     /// The list's Filter menu, open from the title bar.
@@ -70,7 +72,7 @@ enum Scene {
 }
 
 impl Scene {
-    const ALL: [Scene; 29] = [
+    const ALL: [Scene; 30] = [
         Self::List,
         Self::OneCommit,
         Self::RowMenu,
@@ -80,6 +82,7 @@ impl Scene {
         Self::RequestReview,
         Self::Thread,
         Self::ApprovePopover,
+        Self::MergePopover,
         Self::TitlePopover,
         Self::ThreadCodeFont,
         Self::ThreadEspresso,
@@ -107,6 +110,7 @@ impl Scene {
             Self::List => "01-list",
             Self::Thread => "02-thread",
             Self::ApprovePopover => "03b-approve-popover",
+            Self::MergePopover => "03e-merge-popover",
             Self::RowMenu => "01c-row-menu",
             Self::FilterMenu => "01d-filter-menu",
             Self::RepoMenu => "01e-repo-menu",
@@ -272,6 +276,7 @@ fn render(
             scene,
             Scene::Thread
                 | Scene::ApprovePopover
+                | Scene::MergePopover
                 | Scene::FileMenu
                 | Scene::OneCommit
                 | Scene::RequestReview
@@ -367,14 +372,14 @@ fn render(
         Scene::RequestReview => {
             pr_actions_ui::open_request_review(target.clone(), window, cx);
         }
-        Scene::ApprovePopover | Scene::TitlePopover => {
+        Scene::ApprovePopover | Scene::TitlePopover | Scene::MergePopover => {
             use gpui_kit::test::TestWindowExt as _;
             window.render_frame(cx);
             window.click(
-                if scene == Scene::ApprovePopover {
-                    "approve"
-                } else {
-                    "pull-request-title"
+                match scene {
+                    Scene::ApprovePopover => "approve",
+                    Scene::MergePopover => "merge",
+                    _ => "pull-request-title",
                 },
                 cx,
             );

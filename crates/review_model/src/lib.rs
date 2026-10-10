@@ -493,6 +493,167 @@ pub enum TimelineItem {
     },
 }
 
+/// How a pull request's commits land on its base branch.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MergeMethod {
+    Merge,
+    Squash,
+    Rebase,
+}
+
+impl MergeMethod {
+    /// Every method in GitHub's menu order.
+    pub const ALL: [MergeMethod; 3] = [Self::Merge, Self::Squash, Self::Rebase];
+
+    /// The button label, as GitHub words it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Merge => "Create a merge commit",
+            Self::Squash => "Squash and merge",
+            Self::Rebase => "Rebase and merge",
+        }
+    }
+
+    /// The REST API's `merge_method`.
+    pub fn api_name(self) -> &'static str {
+        match self {
+            Self::Merge => "merge",
+            Self::Squash => "squash",
+            Self::Rebase => "rebase",
+        }
+    }
+
+    /// The GraphQL `PullRequestMergeMethod`.
+    pub fn graphql_name(self) -> &'static str {
+        match self {
+            Self::Merge => "MERGE",
+            Self::Squash => "SQUASH",
+            Self::Rebase => "REBASE",
+        }
+    }
+
+    /// The method for a GraphQL `PullRequestMergeMethod`.
+    pub fn from_graphql(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|method| method.graphql_name() == name)
+    }
+
+    /// Whether the reviewer writes a commit title and message for this method.
+    pub fn has_message(self) -> bool {
+        !matches!(self, Self::Rebase)
+    }
+}
+
+/// Whether a pull request can merge now, as GitHub's `mergeStateStatus` says.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MergeState {
+    /// Mergeable, and every requirement is met.
+    Clean,
+    /// Mergeable, but some checks are failing.
+    Unstable,
+    /// Mergeable, with pre-receive hooks to run.
+    HasHooks,
+    /// Behind the base branch, which the repository requires to be current.
+    Behind,
+    /// Required reviews or checks are missing.
+    Blocked,
+    /// Has conflicts with the base branch.
+    Dirty,
+    Draft,
+    /// GitHub is still working it out.
+    #[default]
+    Unknown,
+}
+
+impl MergeState {
+    /// The state for a GraphQL `MergeStateStatus`.
+    pub fn from_graphql(name: &str) -> Self {
+        match name {
+            "CLEAN" => Self::Clean,
+            "UNSTABLE" => Self::Unstable,
+            "HAS_HOOKS" => Self::HasHooks,
+            "BEHIND" => Self::Behind,
+            "BLOCKED" => Self::Blocked,
+            "DIRTY" => Self::Dirty,
+            "DRAFT" => Self::Draft,
+            _ => Self::Unknown,
+        }
+    }
+
+    /// Whether merging now would go through.
+    pub fn can_merge(self) -> bool {
+        matches!(self, Self::Clean | Self::Unstable | Self::HasHooks)
+    }
+}
+
+/// Auto-merge waiting for a pull request's requirements.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AutoMerge {
+    pub method: MergeMethod,
+    pub enabled_by: String,
+}
+
+impl AutoMerge {
+    /// Auto-merge with `method`, turned on by `enabled_by`.
+    pub fn new(method: MergeMethod, enabled_by: impl Into<String>) -> Self {
+        Self {
+            method,
+            enabled_by: enabled_by.into(),
+        }
+    }
+}
+
+/// What merging a pull request involves: whether it can merge, how, and what the
+/// viewer may do about it.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct MergeInfo {
+    /// The pull request's GraphQL id, which the auto-merge and update mutations take.
+    pub node_id: String,
+    /// The head commit merging expects, so a push in between makes it fail.
+    pub head_sha: String,
+    pub state: MergeState,
+    /// The methods the repository allows, in menu order.
+    pub methods: Vec<MergeMethod>,
+    /// The method GitHub suggests to this viewer.
+    pub default_method: Option<MergeMethod>,
+    pub auto_merge: Option<AutoMerge>,
+    pub can_enable_auto_merge: bool,
+    pub can_disable_auto_merge: bool,
+    pub can_update_branch: bool,
+    /// The repository deletes head branches after merging.
+    pub deletes_branch: bool,
+    /// The head branch lives in a fork, which Switchfold can't push to.
+    pub from_fork: bool,
+}
+
+impl MergeInfo {
+    /// Merge facts for head `head_sha`, in `state`, allowing `methods`.
+    pub fn new(
+        node_id: impl Into<String>,
+        head_sha: impl Into<String>,
+        state: MergeState,
+        methods: Vec<MergeMethod>,
+    ) -> Self {
+        let default_method = methods.first().copied();
+        Self {
+            node_id: node_id.into(),
+            head_sha: head_sha.into(),
+            state,
+            methods,
+            default_method,
+            auto_merge: None,
+            can_enable_auto_merge: false,
+            can_disable_auto_merge: false,
+            can_update_branch: false,
+            deletes_branch: false,
+            from_fork: false,
+        }
+    }
+}
+
 /// Everything the review screen shows about one pull request.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[non_exhaustive]
@@ -511,6 +672,12 @@ pub struct PullRequestDetail {
     pub last_agent_review: Option<AgentReviewSummary>,
     /// Paths the viewer marked as viewed.
     pub viewed: Vec<String>,
+    /// How the pull request merges, when the source knows.
+    #[serde(default)]
+    pub merge: Option<MergeInfo>,
+    /// The signed-in viewer's login, when the source knows.
+    #[serde(default)]
+    pub viewer: Option<String>,
 }
 
 impl PullRequestDetail {
@@ -530,6 +697,8 @@ impl PullRequestDetail {
             depends_on: Vec::new(),
             last_agent_review: None,
             viewed: Vec::new(),
+            merge: None,
+            viewer: None,
         }
     }
 

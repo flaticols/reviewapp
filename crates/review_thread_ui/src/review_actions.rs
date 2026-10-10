@@ -73,10 +73,11 @@ impl ReviewActions {
 }
 
 impl RenderOnce for ReviewActions {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let Some(detail) = self.view.read(cx).detail.clone() else {
             return h_flex();
         };
+        let merge_form = self.view.update(cx, |view, cx| view.merge_form(window, cx));
         let summary = PendingSummary::of(&detail);
         let pending = summary.comments + summary.findings;
         let discard_view = self.view.clone();
@@ -111,6 +112,7 @@ impl RenderOnce for ReviewActions {
                 )
             })
             .child(approve_button(&detail, approve_view, cx))
+            .children(crate::merge::merge_button(&detail, merge_form, cx))
             .child(
                 bordered(
                     Button::new("submit-review"),
@@ -185,7 +187,7 @@ fn layout_buttons(cx: &App) -> impl IntoElement + use<> {
 
 /// A title bar button drawn as a 1 px `border` and `text` in color, with no fill, so
 /// the bar stays calm.
-fn bordered(button: Button, border: gpui_kit::Hsla, text: gpui_kit::Hsla) -> Button {
+pub(crate) fn bordered(button: Button, border: gpui_kit::Hsla, text: gpui_kit::Hsla) -> Button {
     button
         .ghost()
         .border_1()

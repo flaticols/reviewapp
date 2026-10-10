@@ -59,6 +59,112 @@ impl Checkout {
     }
 }
 
+/// Squashes a pull request's commits into one and force-pushes it to its branch.
+#[derive(Clone, Debug)]
+pub struct Squash {
+    clone: PathBuf,
+    number: u64,
+    head_sha: String,
+    head_ref: String,
+    base_ref: String,
+    message: String,
+}
+
+impl Squash {
+    /// Squashes pull request `number` of the clone at `clone`, whose branch `head_ref`
+    /// must still be at `head_sha`, onto its merge base with `base_ref`, as one commit
+    /// with `message`.
+    pub fn new(
+        clone: PathBuf,
+        number: u64,
+        head_sha: impl Into<String>,
+        head_ref: impl Into<String>,
+        base_ref: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            clone,
+            number,
+            head_sha: head_sha.into(),
+            head_ref: head_ref.into(),
+            base_ref: base_ref.into(),
+            message: message.into(),
+        }
+    }
+
+    /// Does it in a temporary worktree, so no checkout of the user's changes, and
+    /// pushes with a lease on `head_sha`: if anyone pushed since, nothing is
+    /// overwritten. Returns the new head commit.
+    pub fn run(&self) -> Result<String, CheckoutError> {
+        if self.message.trim().is_empty() {
+            return Err(CheckoutError("The commit message is empty.".into()));
+        }
+        let commit = format!("{}^{{commit}}", self.head_sha);
+        if git(&self.clone, &["cat-file", "-e", &commit]).is_err() {
+            git(
+                &self.clone,
+                &[
+                    "fetch",
+                    "--quiet",
+                    "origin",
+                    &format!("pull/{}/head", self.number),
+                ],
+            )?;
+        }
+        git(&self.clone, &["fetch", "--quiet", "origin", &self.base_ref])?;
+        let scratch = std::env::temp_dir().join(format!(
+            "switchfold-squash-{}-{}",
+            self.number,
+            std::process::id()
+        ));
+        let scratch_text = scratch.to_string_lossy().into_owned();
+        git(&self.clone, &["worktree", "prune"]).ok();
+        git(
+            &self.clone,
+            &[
+                "worktree",
+                "add",
+                "--force",
+                "--detach",
+                &scratch_text,
+                &self.head_sha,
+            ],
+        )?;
+        let result = (|| {
+            let base = git(
+                &scratch,
+                &["merge-base", &format!("origin/{}", self.base_ref), "HEAD"],
+            )?;
+            git(&scratch, &["reset", "--soft", &base])?;
+            git(
+                &scratch,
+                &["commit", "--quiet", "--no-verify", "-m", &self.message],
+            )?;
+            let squashed = git(&scratch, &["rev-parse", "HEAD"])?;
+            git(
+                &scratch,
+                &[
+                    "push",
+                    "--quiet",
+                    &format!(
+                        "--force-with-lease=refs/heads/{}:{}",
+                        self.head_ref, self.head_sha
+                    ),
+                    "origin",
+                    &format!("HEAD:refs/heads/{}", self.head_ref),
+                ],
+            )?;
+            Ok(squashed)
+        })();
+        git(
+            &self.clone,
+            &["worktree", "remove", "--force", &scratch_text],
+        )
+        .ok();
+        result
+    }
+}
+
 /// The commit checked out in the work tree at `dir`, or `None` when it isn't one.
 pub fn head_of(dir: &Path) -> Option<String> {
     if !dir.join(".git").exists() {
@@ -326,6 +432,52 @@ mod tests {
         assert!(!path.join(".claude").exists());
         assert_eq!(tree.ensure().unwrap(), path);
         assert!(!path.join(".mcp.json").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn squashing_pushes_one_commit_with_a_lease() {
+        let dir =
+            std::env::temp_dir().join(format!("switchfold-squash-test-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let (clone, _) = repositories(&dir);
+        let origin = dir.join("origin");
+        let run = |dir: &Path, args: &[&str]| git(dir, args).unwrap();
+        // A second commit on the branch, so there is something to squash.
+        run(&origin, &["checkout", "--quiet", "feature"]);
+        std::fs::write(origin.join("b.txt"), "more\n").unwrap();
+        run(&origin, &["add", "."]);
+        run(&origin, &["commit", "--quiet", "-m", "more"]);
+        let head = run(&origin, &["rev-parse", "HEAD"]);
+        run(&origin, &["checkout", "--quiet", "main"]);
+        run(&clone, &["fetch", "--quiet", "origin", "feature"]);
+        run(&clone, &["config", "user.email", "t@example.com"]);
+        run(&clone, &["config", "user.name", "t"]);
+        let squash = Squash::new(
+            clone.clone(),
+            7,
+            head.clone(),
+            "feature",
+            "main",
+            "One commit",
+        );
+        let squashed = squash.run().expect("squash and push");
+        let pushed = run(&origin, &["rev-parse", "feature"]);
+        assert_eq!(pushed, squashed);
+        assert_eq!(run(&origin, &["rev-list", "--count", "main..feature"]), "1");
+        assert_eq!(
+            run(&origin, &["log", "-1", "--format=%s", "feature"]),
+            "One commit"
+        );
+        assert_eq!(
+            run(&origin, &["show", "feature:b.txt"]),
+            "more",
+            "the squashed commit keeps every change"
+        );
+        // The branch moved on: a squash from the old head is refused, not forced.
+        let stale = Squash::new(clone.clone(), 7, head, "feature", "main", "Again");
+        assert!(stale.run().is_err());
         std::fs::remove_dir_all(&dir).ok();
     }
 

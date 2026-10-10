@@ -8,6 +8,7 @@ mod commits;
 mod filters;
 mod inspector;
 mod menus;
+mod merge;
 mod outline;
 mod review_actions;
 mod rows;
@@ -180,6 +181,7 @@ pub struct ReviewThreadView {
     runs: Vec<Entity<agent_review_ui::AgentRun>>,
     /// The Review with an agent form, made the first time the Reviews tab shows it.
     start_form: Option<Entity<agent_review_ui::StartReviewForm>>,
+    merge_form: Option<Entity<merge::MergeForm>>,
     /// Whether the form is open; `None` until the reviewer opens or hides it.
     start_form_open: Option<bool>,
     /// The single commit the timeline shows, when one is picked.
@@ -291,6 +293,7 @@ impl ReviewThreadView {
             active_runs: Vec::new(),
             commit: None,
             start_form: None,
+            merge_form: None,
             start_form_open: None,
             rows: Rc::default(),
             measured_rem: None,

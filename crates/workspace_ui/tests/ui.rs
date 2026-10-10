@@ -691,3 +691,33 @@ fn a_color_circle_sets_the_repository_color_and_closes_the_menu(cx: &mut TestApp
         .unwrap();
     assert!(!still_open, "picking a color closes the menu");
 }
+
+#[gpui_kit::test]
+fn merging_from_the_title_bar_uses_the_chosen_method(cx: &mut TestAppContext) {
+    use app_state_ui::StoresExt as _;
+    let (window, _) = open_featured(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("merge", cx);
+    })
+    .unwrap();
+    settle(window, "merge-confirm", cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("merge-confirm", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let state = cx.update(|cx| {
+        cx.stores()
+            .pull_requests()
+            .read(cx)
+            .pull_request(&featured())
+            .map(|pr| pr.state)
+    });
+    assert_eq!(
+        state,
+        Some(pr_model::PullRequestState::Merged),
+        "merging with the repository's default, squash, marks it merged"
+    );
+}

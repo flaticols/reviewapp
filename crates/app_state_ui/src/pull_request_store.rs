@@ -645,6 +645,125 @@ impl PullRequestStore {
         })
     }
 
+    /// Fetches `key` again and replaces what is shown, keeping what only exists here,
+    /// as after merging or updating its branch.
+    pub fn reload_detail(&mut self, key: &PullRequestKey, cx: &mut Context<Self>) {
+        let source = self.source.clone();
+        let key = key.clone();
+        cx.spawn(async move |this, cx| {
+            let request_key = key.clone();
+            let Ok(mut fresh) = cx
+                .background_spawn(async move { source.detail(&request_key) })
+                .await
+            else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                if let Some(DetailState::Loaded(current)) = this.details.get(&key) {
+                    carry_local(&mut fresh, current);
+                }
+                this.details
+                    .insert(key.clone(), DetailState::Loaded(Box::new(fresh)));
+                this.save_detail(&key, cx);
+                cx.emit(PullRequestStoreEvent::DetailChanged(key));
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The loaded merge facts of `key`, or an error saying they aren't known yet.
+    fn merge_info(&self, key: &PullRequestKey) -> Result<review_model::MergeInfo, ApiError> {
+        self.loaded_detail(key)
+            .and_then(|detail| detail.merge.clone())
+            .ok_or_else(|| {
+                ApiError::new("Switchfold doesn’t know yet how this pull request merges.")
+            })
+    }
+
+    /// Merges `key` with `method`, guarded by the head commit Switchfold has seen. On
+    /// success it shows as merged and reloads.
+    pub fn merge(
+        &mut self,
+        key: &PullRequestKey,
+        method: review_model::MergeMethod,
+        title: String,
+        message: String,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(), ApiError>> {
+        let info = match self.merge_info(key) {
+            Ok(info) => info,
+            Err(error) => return Task::ready(Err(error)),
+        };
+        let source = self.source.clone();
+        let key = key.clone();
+        cx.spawn(async move |this, cx| {
+            let request_key = key.clone();
+            cx.background_spawn(async move {
+                source.merge(&request_key, method, &title, &message, &info.head_sha)
+            })
+            .await?;
+            this.update(cx, |this, cx| {
+                if let Some(pr) = this.pull_requests.iter_mut().find(|pr| pr.key == key) {
+                    pr.state = PullRequestState::Merged;
+                }
+                this.update_detail(&key, cx, |detail| {
+                    detail.summary.state = PullRequestState::Merged
+                });
+                this.reload_detail(&key, cx);
+                cx.emit(PullRequestStoreEvent::ListChanged);
+                cx.notify();
+            })
+            .map_err(|_| ApiError::new("The window closed before the merge was confirmed."))
+        })
+    }
+
+    /// Turns auto-merge on for `key` with `method`, or off with `None`, then reloads.
+    pub fn set_auto_merge(
+        &mut self,
+        key: &PullRequestKey,
+        method: Option<review_model::MergeMethod>,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(), ApiError>> {
+        let info = match self.merge_info(key) {
+            Ok(info) => info,
+            Err(error) => return Task::ready(Err(error)),
+        };
+        let source = self.source.clone();
+        let key = key.clone();
+        cx.spawn(async move |this, cx| {
+            cx.background_spawn(async move { source.set_auto_merge(&info.node_id, method) })
+                .await?;
+            this.update(cx, |this, cx| this.reload_detail(&key, cx))
+                .map_err(|_| ApiError::new("The window closed before the change was saved."))
+        })
+    }
+
+    /// Brings `key`'s branch up to date with its base, by merge or by rebase, then
+    /// reloads.
+    pub fn update_branch(
+        &mut self,
+        key: &PullRequestKey,
+        rebase: bool,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(), ApiError>> {
+        let info = match self.merge_info(key) {
+            Ok(info) => info,
+            Err(error) => return Task::ready(Err(error)),
+        };
+        let source = self.source.clone();
+        let key = key.clone();
+        cx.spawn(async move |this, cx| {
+            cx.background_spawn(async move {
+                source.update_branch(&info.node_id, &info.head_sha, rebase)
+            })
+            .await?;
+            this.update(cx, |this, cx| this.reload_detail(&key, cx))
+                .map_err(|_| ApiError::new("The window closed before the change was saved."))
+        })
+    }
+
     /// Asks `reviewers` to review `key`; they show as pending reviewers once GitHub
     /// accepts.
     pub fn request_reviewers(

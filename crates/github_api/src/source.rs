@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use pr_model::{PullRequest, PullRequestKey, RepoSlug};
-use review_model::{Actor, CheckRun, PullRequestDetail, ReviewVerdict};
+use review_model::{Actor, CheckRun, MergeMethod, PullRequestDetail, ReviewVerdict};
 
 /// A failed GitHub request, with a message suitable for the interface.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,6 +112,25 @@ pub trait PullRequestSource: Send + Sync {
 
     /// Closes the pull request, or reopens it when `open`.
     fn set_open(&self, key: &PullRequestKey, open: bool) -> Result<(), ApiError>;
+
+    /// Merges `key` with `method`, as long as its head is still `head_sha`. Title and
+    /// message are the commit's, for methods that write one.
+    fn merge(
+        &self,
+        key: &PullRequestKey,
+        method: MergeMethod,
+        title: &str,
+        message: &str,
+        head_sha: &str,
+    ) -> Result<(), ApiError>;
+
+    /// Turns auto-merge on with `method`, or off with `None`, for the pull request with
+    /// GraphQL id `node_id`.
+    fn set_auto_merge(&self, node_id: &str, method: Option<MergeMethod>) -> Result<(), ApiError>;
+
+    /// Brings the pull request's branch up to date with its base, by merging the base in
+    /// or rebasing onto it, as long as its head is still `head_sha`.
+    fn update_branch(&self, node_id: &str, head_sha: &str, rebase: bool) -> Result<(), ApiError>;
 
     /// Asks `logins` to review the pull request.
     fn request_reviewers(&self, key: &PullRequestKey, logins: &[String]) -> Result<(), ApiError>;
@@ -262,6 +281,31 @@ impl PullRequestSource for FixtureSource {
             }
         }
         Ok(())
+    }
+
+    fn merge(
+        &self,
+        key: &PullRequestKey,
+        method: MergeMethod,
+        _title: &str,
+        _message: &str,
+        _head_sha: &str,
+    ) -> Result<(), ApiError> {
+        self.record(format!("merge {key:?} {}", method.api_name()))
+    }
+
+    fn set_auto_merge(&self, node_id: &str, method: Option<MergeMethod>) -> Result<(), ApiError> {
+        self.record(format!(
+            "auto-merge {node_id} {}",
+            method.map_or("off", MergeMethod::api_name)
+        ))
+    }
+
+    fn update_branch(&self, node_id: &str, _head_sha: &str, rebase: bool) -> Result<(), ApiError> {
+        self.record(format!(
+            "update-branch {node_id} {}",
+            if rebase { "rebase" } else { "merge" }
+        ))
     }
 
     fn set_open(&self, key: &PullRequestKey, open: bool) -> Result<(), ApiError> {

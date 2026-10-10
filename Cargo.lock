@@ -7200,6 +7200,7 @@ dependencies = [
  "fixtures",
  "git_diff",
  "git_worktree",
+ "github_api",
  "gpui-kit",
  "markdown_ui",
  "pr_actions_ui",

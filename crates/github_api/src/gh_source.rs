@@ -9,8 +9,9 @@ use pr_model::{
     Timestamp,
 };
 use review_model::{
-    Actor, CheckRun, CheckStep, Comment, Commit, Dependency, LogLine, LogLineKind,
-    PullRequestDetail, ReviewThread, ReviewVerdict, Reviewer, ReviewerState, TimelineItem,
+    Actor, AutoMerge, CheckRun, CheckStep, Comment, Commit, Dependency, LogLine, LogLineKind,
+    MergeInfo, MergeMethod, MergeState, PullRequestDetail, ReviewThread, ReviewVerdict, Reviewer,
+    ReviewerState, TimelineItem,
 };
 use serde_json::{Value, json};
 
@@ -142,7 +143,11 @@ const DETAIL_QUERY: &str = r#"
 query($owner: String!, $name: String!, $number: Int!) {
   viewer { login }
   repository(owner: $owner, name: $name) {
+    mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed deleteBranchOnMerge viewerDefaultMergeMethod
     pullRequest(number: $number) {
+      id headRefOid mergeStateStatus viewerCanEnableAutoMerge viewerCanDisableAutoMerge viewerCanUpdateBranch
+      isCrossRepository
+      autoMergeRequest { mergeMethod enabledBy { login } }
       number title body isDraft state updatedAt createdAt
       author { login ... on User { name } }
       headRefName baseRefName reviewDecision
@@ -199,6 +204,50 @@ fn ci_status(rollup: &Value) -> Option<CheckStatus> {
         "PENDING" | "EXPECTED" => Some(CheckStatus::Running),
         _ => None,
     }
+}
+
+/// What merging involves, from the repository's settings and the pull request.
+fn merge_info(repository: &Value, node: &Value) -> Option<MergeInfo> {
+    let node_id = node["id"].as_str()?;
+    let methods: Vec<MergeMethod> = [
+        ("mergeCommitAllowed", MergeMethod::Merge),
+        ("squashMergeAllowed", MergeMethod::Squash),
+        ("rebaseMergeAllowed", MergeMethod::Rebase),
+    ]
+    .into_iter()
+    .filter(|(field, _)| repository[*field].as_bool().unwrap_or(false))
+    .map(|(_, method)| method)
+    .collect();
+    let mut info = MergeInfo::new(
+        node_id,
+        node["headRefOid"].as_str().unwrap_or_default(),
+        MergeState::from_graphql(node["mergeStateStatus"].as_str().unwrap_or_default()),
+        methods,
+    );
+    if let Some(default) = repository["viewerDefaultMergeMethod"]
+        .as_str()
+        .and_then(MergeMethod::from_graphql)
+        .filter(|method| info.methods.contains(method))
+    {
+        info.default_method = Some(default);
+    }
+    info.auto_merge = node["autoMergeRequest"]["mergeMethod"]
+        .as_str()
+        .and_then(MergeMethod::from_graphql)
+        .map(|method| {
+            AutoMerge::new(
+                method,
+                node["autoMergeRequest"]["enabledBy"]["login"]
+                    .as_str()
+                    .unwrap_or_default(),
+            )
+        });
+    info.can_enable_auto_merge = node["viewerCanEnableAutoMerge"].as_bool().unwrap_or(false);
+    info.can_disable_auto_merge = node["viewerCanDisableAutoMerge"].as_bool().unwrap_or(false);
+    info.can_update_branch = node["viewerCanUpdateBranch"].as_bool().unwrap_or(false);
+    info.deletes_branch = repository["deleteBranchOnMerge"].as_bool().unwrap_or(false);
+    info.from_fork = node["isCrossRepository"].as_bool().unwrap_or(false);
+    Some(info)
 }
 
 /// How much of a description the list keeps, enough for triage to judge by.
@@ -606,6 +655,8 @@ impl PullRequestSource for GhSource {
             node["body"].as_str().unwrap_or_default(),
             timestamp(&node["createdAt"]),
         );
+        detail.viewer = (!viewer.is_empty()).then(|| viewer.clone());
+        detail.merge = merge_info(&data["repository"], node);
         detail.commits = node["commits"]["nodes"]
             .as_array()
             .cloned()
@@ -900,6 +951,52 @@ impl PullRequestSource for GhSource {
                 &format!("repos/{}/actions/runs/{run}/rerun-failed-jobs", key.repo()),
             ],
             None,
+        )?;
+        Ok(())
+    }
+
+    fn merge(
+        &self,
+        key: &PullRequestKey,
+        method: MergeMethod,
+        title: &str,
+        message: &str,
+        head_sha: &str,
+    ) -> Result<(), ApiError> {
+        let mut body = json!({ "merge_method": method.api_name(), "sha": head_sha });
+        if method.has_message() {
+            body["commit_title"] = json!(title);
+            body["commit_message"] = json!(message);
+        }
+        self.api(
+            &[
+                "--method",
+                "PUT",
+                &format!("repos/{}/pulls/{}/merge", key.repo(), key.number()),
+            ],
+            Some(&body),
+        )?;
+        Ok(())
+    }
+
+    fn set_auto_merge(&self, node_id: &str, method: Option<MergeMethod>) -> Result<(), ApiError> {
+        match method {
+            Some(method) => self.graphql(
+                "mutation($id: ID!, $method: PullRequestMergeMethod!) { enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: $method}) { clientMutationId } }",
+                json!({ "id": node_id, "method": method.graphql_name() }),
+            )?,
+            None => self.graphql(
+                "mutation($id: ID!) { disablePullRequestAutoMerge(input: {pullRequestId: $id}) { clientMutationId } }",
+                json!({ "id": node_id }),
+            )?,
+        };
+        Ok(())
+    }
+
+    fn update_branch(&self, node_id: &str, head_sha: &str, rebase: bool) -> Result<(), ApiError> {
+        self.graphql(
+            "mutation($id: ID!, $head: GitObjectID!, $method: PullRequestBranchUpdateMethod!) { updatePullRequestBranch(input: {pullRequestId: $id, expectedHeadOid: $head, updateMethod: $method}) { clientMutationId } }",
+            json!({ "id": node_id, "head": head_sha, "method": if rebase { "REBASE" } else { "MERGE" } }),
         )?;
         Ok(())
     }
