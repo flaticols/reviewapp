@@ -18,15 +18,15 @@ pub use settings_model::{DarkTheme, LightTheme};
 pub use tokens::AppTheme;
 pub use typography::{TypographyExt, code_line_height};
 
-/// The title bar's height, Zed's; overlays that sit below it use the same value. Fixed
-/// rather than in rem: the traffic lights don't scale with the interface size, so a bar
-/// that did would stop lining up with them.
-pub const TITLE_BAR_HEIGHT: Pixels = px(32.);
+/// The title bar's height, the compact height of macOS unified toolbars; overlays that
+/// sit below it use the same value. Fixed rather than in rem: the traffic lights don't
+/// scale with the interface size, so a bar that did would stop lining up with them.
+pub const TITLE_BAR_HEIGHT: Pixels = px(38.);
 
 /// Where the traffic lights go, in points from the window's top-left corner. A traffic
-/// light is 15 pt tall as measured in a real window, so 8.5 centers it in the
-/// [`TITLE_BAR_HEIGHT`] bar; the left inset matches the top one, as in Zed.
-pub const TRAFFIC_LIGHT_POSITION: Point<Pixels> = point(px(9.), px(8.5));
+/// light is 15 pt tall as measured in a real window, so 11.5 centers it in the
+/// [`TITLE_BAR_HEIGHT`] bar.
+pub const TRAFFIC_LIGHT_POSITION: Point<Pixels> = point(px(12.), px(11.5));
 
 impl Global for AppTheme {}
 
