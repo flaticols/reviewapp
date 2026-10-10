@@ -10,7 +10,10 @@ mod request_review;
 mod zed;
 
 pub use file_menu::{FileTarget, file_menu};
-pub use local::check_out;
+pub use local::{check_out, reveal_repository};
 pub use pull_request_menu::{PullRequestTarget, pull_request_menu};
 pub use request_review::open_request_review;
-pub use zed::{ask_zed_agent, detail_when_loaded, diff_in_zed, open_commit_in_zed, open_in_zed};
+pub use zed::{
+    ask_zed_agent, detail_when_loaded, diff_in_zed, open_commit_in_zed, open_in_zed,
+    open_repository_in_zed,
+};

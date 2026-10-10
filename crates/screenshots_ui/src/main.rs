@@ -195,6 +195,23 @@ fn render(
         }
         let mut look = settings_model::Preferences::default();
         look.appearance = appearance;
+        if matches!(scene, Scene::List | Scene::RowMenu | Scene::FilterMenu) {
+            look.set_pinned("flaticols/switchfold", true);
+            look.set_repository_color(
+                "flaticols/switchfold",
+                Some(settings_model::RepositoryColor::Blue),
+            );
+            look.set_repository_color(
+                "flaticols/gathering-app",
+                Some(settings_model::RepositoryColor::Green),
+            );
+            use app_state_ui::StoresExt as _;
+            let settings = cx.stores().settings().clone();
+            let saved = look.clone();
+            settings.update(cx, |settings, cx| {
+                settings.update_preferences(cx, |p| *p = saved)
+            });
+        }
         if scene == Scene::ThreadEspresso {
             look.dark_theme = settings_model::DarkTheme::Espresso;
             look.light_theme = settings_model::LightTheme::IslandsLight;

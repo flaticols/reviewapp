@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use app_state_ui::StoresExt as _;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     Collapsible, Sizable as _,
@@ -30,6 +31,8 @@ pub struct NavSection {
     action: Option<HeaderAction>,
     menu: SidebarMenu,
     collapsed: bool,
+    /// Set for sections the reviewer can fold: whether it is folded now.
+    folded: Option<bool>,
 }
 
 impl NavSection {
@@ -40,7 +43,14 @@ impl NavSection {
             action: None,
             menu,
             collapsed: false,
+            folded: None,
         }
+    }
+
+    /// Lets the reviewer fold the section from its header; `folded` is its saved state.
+    pub fn foldable(mut self, folded: bool) -> Self {
+        self.folded = Some(folded);
+        self
     }
 
     /// Adds a `+` button to the header.
@@ -77,27 +87,41 @@ impl SidebarItem for NavSection {
         window: &mut Window,
         cx: &mut App,
     ) -> impl IntoElement {
-        let header = self.action.map_or_else(
-            || SectionHeader::new(self.label.clone()),
-            |action| {
-                let handler = action.handler.clone();
-                SectionHeader::new(self.label.clone()).action(
-                    Button::new(action.id)
-                        .ghost()
-                        .xsmall()
-                        .icon(IconName::Plus)
-                        .tooltip(action.tooltip)
-                        .on_click(move |event, window, cx| handler(event, window, cx)),
-                )
-            },
-        );
+        let mut header = SectionHeader::new(self.label.clone());
+        if let Some(action) = self.action {
+            let handler = action.handler.clone();
+            header = header.action(
+                Button::new(action.id)
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::Plus)
+                    .tooltip(action.tooltip)
+                    .on_click(move |event, window, cx| handler(event, window, cx)),
+            );
+        }
+        let folded = self.folded.unwrap_or(false);
+        if self.folded.is_some() {
+            let name = self.label.to_string();
+            header = header.disclosure(
+                SharedString::from(format!("fold-{name}")),
+                !folded,
+                move |_, _, cx| {
+                    let name = name.clone();
+                    cx.stores().settings().clone().update(cx, |settings, cx| {
+                        settings.update_preferences(cx, |p| p.set_folded(&name, !folded))
+                    });
+                },
+            );
+        }
         v_flex()
             .when(!self.collapsed, |this| this.child(header))
-            .child(
-                self.menu
-                    .gap_0p5()
-                    .collapsed(self.collapsed)
-                    .render(id, window, cx),
-            )
+            .when(!folded || self.collapsed, |this| {
+                this.child(
+                    self.menu
+                        .gap_0p5()
+                        .collapsed(self.collapsed)
+                        .render(id, window, cx),
+                )
+            })
     }
 }

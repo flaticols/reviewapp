@@ -93,6 +93,20 @@ pub fn apply(preferences: &Preferences, window: Option<&mut Window>, cx: &mut Ap
     });
 }
 
+/// The theme color for a repository color.
+pub fn repository_color(color: settings_model::RepositoryColor, cx: &App) -> gpui_kit::Hsla {
+    use settings_model::RepositoryColor;
+    let theme = cx.theme();
+    match color {
+        RepositoryColor::Red => theme.red,
+        RepositoryColor::Yellow => theme.yellow,
+        RepositoryColor::Green => theme.green,
+        RepositoryColor::Cyan => theme.cyan,
+        RepositoryColor::Blue => theme.blue,
+        RepositoryColor::Purple => theme.magenta,
+    }
+}
+
 /// The code font beyond the theme's family: the theme's own monospace family, for
 /// naming the default in settings, and the size the reviewer picked, if any.
 #[derive(Clone, Debug, Default)]

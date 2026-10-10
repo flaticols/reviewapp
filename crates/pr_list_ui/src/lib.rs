@@ -9,7 +9,7 @@ mod toolbar;
 use std::ops::Range;
 
 use app_state_ui::actions::{
-    FocusFilter, OpenSelected, OpenSettings, Refresh, SelectNext, SelectPrevious, ToggleSidebar,
+    FocusFilter, OpenSelected, Refresh, SelectNext, SelectPrevious, ToggleSidebar,
 };
 use app_state_ui::{ListState, PullRequestStore, StoresExt as _};
 use gpui_kit::assets::IconName;
@@ -18,8 +18,8 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{InputEvent, InputState},
-    menu::ContextMenuExt as _,
-    sidebar::{Sidebar, SidebarCollapsible, SidebarItem as _, SidebarMenu, SidebarMenuItem},
+    menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
+    sidebar::{Sidebar, SidebarCollapsible, SidebarMenu, SidebarMenuItem},
     v_flex,
 };
 use gpui_kit::{
@@ -229,7 +229,7 @@ impl PullRequestList {
         }
     }
 
-    fn render_sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity();
         let store = cx.stores().pull_requests().read(cx);
         let settings = cx.stores().settings().read(cx);
@@ -272,53 +272,76 @@ impl PullRequestList {
                 })
         }));
 
-        let repositories = sidebar_repositories(prs, settings.repositories(), saved_filters);
-        let repo_menu =
-            SidebarMenu::new().children(repositories.into_iter().map(|(repo, count)| {
-                let scope = Scope::Repository(repo.clone());
-                let view = view.clone();
-                let active = self.scope == scope;
-                SidebarMenuItem::new(repo.name().clone())
-                    .label_style(label_style())
-                    .icon(Icon::new(IconName::FolderGit2))
-                    .active(active)
-                    .suffix(move |_, _| Counter::new(count))
-                    .on_click(move |_, _, cx| {
-                        let scope = scope.clone();
-                        view.update(cx, |this, cx| this.set_scope(scope, cx))
-                    })
-            }));
+        let preferences = settings.preferences().clone();
+        let mut repositories = sidebar_repositories(prs, settings.repositories(), saved_filters);
+        let mut pinned: Vec<(RepoSlug, usize)> = Vec::new();
+        for slug in &preferences.pinned_repositories {
+            if let Some(ix) = repositories
+                .iter()
+                .position(|(repo, _)| &repo.to_string() == slug)
+            {
+                pinned.push(repositories.remove(ix));
+            }
+        }
+        let item = |repo: RepoSlug, count: usize, cx: &App| {
+            let scope = Scope::Repository(repo.clone());
+            let active = self.scope == scope;
+            let slug = repo.to_string();
+            let color = preferences
+                .repository_color(&slug)
+                .map(|color| theme_ui::repository_color(color, cx));
+            let is_pinned = preferences.is_pinned(&slug);
+            let view = view.clone();
+            let menu_repo = repo.clone();
+            let menu_view = view.clone();
+            SidebarMenuItem::new(repo.name().clone())
+                .label_style(label_style())
+                .icon(match color {
+                    Some(color) => Icon::new(IconName::FolderGit2).text_color(color),
+                    None => Icon::new(IconName::FolderGit2),
+                })
+                .active(active)
+                .suffix(move |_, _| Counter::new(count))
+                .on_click(move |_, _, cx| {
+                    let scope = scope.clone();
+                    view.update(cx, |this, cx| this.set_scope(scope, cx))
+                })
+                .context_menu(move |menu, _, cx| {
+                    repository_menu(menu, &menu_repo, is_pinned, menu_view.clone(), cx)
+                })
+        };
+        let pinned_menu = SidebarMenu::new().children(
+            pinned
+                .iter()
+                .map(|(repo, count)| item(repo.clone(), *count, cx)),
+        );
+        let repo_menu = SidebarMenu::new().children(
+            repositories
+                .iter()
+                .map(|(repo, count)| item(repo.clone(), *count, cx)),
+        );
 
         let add_repository = view.clone();
-        Sidebar::new("pr-sidebar")
+        let mut sidebar = Sidebar::new("pr-sidebar")
             .collapsible(SidebarCollapsible::Offcanvas)
             .collapsed(self.sidebar_collapsed)
             .w(rems(15.5))
-            .child(sidebar::NavSection::new("Pull requests", inbox_menu))
+            .child(sidebar::NavSection::new("Pull requests", inbox_menu));
+        if !pinned.is_empty() {
+            sidebar = sidebar.child(
+                sidebar::NavSection::new("Pinned", pinned_menu)
+                    .foldable(preferences.is_folded("Pinned")),
+            );
+        }
+        sidebar
             .child(sidebar::NavSection::new("Saved filters", saved_menu))
             .child(
-                sidebar::NavSection::new("Repositories", repo_menu).add_action(
-                    "add-repository",
-                    "Add repository…",
-                    move |_, _, cx| {
+                sidebar::NavSection::new("Repositories", repo_menu)
+                    .foldable(preferences.is_folded("Repositories"))
+                    .add_action("add-repository", "Add repository…", move |_, _, cx| {
                         add_repository
                             .update(cx, |_, cx| cx.emit(PullRequestListEvent::AddRepository))
-                    },
-                ),
-            )
-            .footer(
-                div().w_full().child(
-                    SidebarMenu::new()
-                        .child(
-                            SidebarMenuItem::new("Settings…")
-                                .label_style(label_style())
-                                .icon(Icon::new(IconName::Settings))
-                                .on_click(|_, window, cx| {
-                                    window.dispatch_action(Box::new(OpenSettings), cx)
-                                }),
-                        )
-                        .render("sidebar-footer", window, cx),
-                ),
+                    }),
             )
     }
 
@@ -500,6 +523,14 @@ impl PullRequestList {
                             triage_ui::TriageStoreExt::triage(&**cx)
                                 .and_then(|store| store.read(cx).pull_request(&pr.key)),
                         )
+                        .repo_color(
+                            cx.stores()
+                                .settings()
+                                .read(cx)
+                                .preferences()
+                                .repository_color(&pr.key.repo().to_string())
+                                .map(|color| theme_ui::repository_color(color, cx)),
+                        )
                         .on_click(move |_, window, cx| {
                             let key = key.clone();
                             view.update(cx, |this, cx| {
@@ -614,6 +645,118 @@ fn sidebar_repositories(
     counted
 }
 
+/// Actions on a repository in the sidebar: pin, color, open, copy, and its settings.
+fn repository_menu(
+    menu: PopupMenu,
+    repo: &RepoSlug,
+    pinned: bool,
+    view: Entity<PullRequestList>,
+    cx: &App,
+) -> PopupMenu {
+    let slug = repo.to_string();
+    let current = cx
+        .stores()
+        .settings()
+        .read(cx)
+        .preferences()
+        .repository_color(&slug);
+    let url = format!("https://github.com/{slug}");
+    let cloned = cx.stores().settings().read(cx).clone_path(repo).is_some();
+    let set = |edit: Box<dyn Fn(&mut settings_model::Preferences)>| {
+        move |_: &gpui_kit::ClickEvent, _: &mut Window, cx: &mut App| {
+            cx.stores().settings().clone().update(cx, |settings, cx| {
+                settings.update_preferences(cx, |p| edit(p))
+            })
+        }
+    };
+    let pin_slug = slug.clone();
+    let menu = menu.item(
+        PopupMenuItem::new(if pinned { "Unpin" } else { "Pin to sidebar" })
+            .icon(Icon::new(if pinned {
+                IconName::PinOff
+            } else {
+                IconName::Pin
+            }))
+            .on_click(set(Box::new(move |p| p.set_pinned(&pin_slug, !pinned)))),
+    );
+    let menu = menu.separator().label("Color");
+    let none_slug = slug.clone();
+    let menu = menu.item(
+        PopupMenuItem::new("None")
+            .checked(current.is_none())
+            .on_click(set(Box::new(move |p| {
+                p.set_repository_color(&none_slug, None)
+            }))),
+    );
+    let menu = settings_model::RepositoryColor::ALL
+        .iter()
+        .fold(menu, |menu, color| {
+            let color = *color;
+            let color_slug = slug.clone();
+            menu.item(
+                PopupMenuItem::new(color.label())
+                    .icon(
+                        Icon::new(IconName::Circle)
+                            .text_color(theme_ui::repository_color(color, cx)),
+                    )
+                    .checked(current == Some(color))
+                    .on_click(set(Box::new(move |p| {
+                        p.set_repository_color(&color_slug, Some(color))
+                    }))),
+            )
+        });
+    let github = url.clone();
+    let zed_repo = repo.clone();
+    let finder_repo = repo.clone();
+    let copy_name = slug.clone();
+    let copy_url = url.clone();
+    menu.separator()
+        .item(
+            PopupMenuItem::new("Open on GitHub")
+                .icon(Icon::new(IconName::Globe))
+                .on_click(move |_, _, cx| cx.open_url(&github)),
+        )
+        .item(
+            PopupMenuItem::new("Open in Zed")
+                .icon(Icon::new(IconName::ExternalLink))
+                .disabled(!cloned)
+                .on_click(move |_, window, cx| {
+                    pr_actions_ui::open_repository_in_zed(&zed_repo, window, cx)
+                }),
+        )
+        .item(
+            PopupMenuItem::new("Reveal in Finder")
+                .icon(Icon::new(IconName::Folder))
+                .disabled(!cloned)
+                .on_click(move |_, window, cx| {
+                    pr_actions_ui::reveal_repository(&finder_repo, window, cx)
+                }),
+        )
+        .separator()
+        .item(
+            PopupMenuItem::new("Copy name")
+                .icon(Icon::new(IconName::Copy))
+                .on_click(move |_, _, cx| {
+                    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(copy_name.clone()))
+                }),
+        )
+        .item(
+            PopupMenuItem::new("Copy link")
+                .icon(Icon::new(IconName::Link))
+                .on_click(move |_, _, cx| {
+                    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(copy_url.clone()))
+                }),
+        )
+        .separator()
+        .item(
+            PopupMenuItem::new("Repository settings…")
+                .icon(Icon::new(IconName::Settings))
+                .on_click(move |_, _, cx| {
+                    view.update(cx, |_, cx| cx.emit(PullRequestListEvent::AddRepository))
+                }),
+        )
+}
+
 /// An active filter as a chip: its name, its value, and how to clear it.
 type Chip = (&'static str, String, fn(&mut ListFilters));
 
@@ -639,7 +782,7 @@ impl Render for PullRequestList {
                     .clone()
                     .update(cx, |store: &mut PullRequestStore, cx| store.refresh(cx))
             }))
-            .child(self.render_sidebar(window, cx))
+            .child(self.render_sidebar(cx))
             .child(
                 v_flex()
                     .flex_1()

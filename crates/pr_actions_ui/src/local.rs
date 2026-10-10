@@ -3,15 +3,20 @@ use std::path::PathBuf;
 use app_state_ui::StoresExt as _;
 use gpui_kit::component::{WindowExt as _, notification::Notification};
 use gpui_kit::{App, AppContext as _, Window};
-use pr_model::PullRequestKey;
+use pr_model::{PullRequestKey, RepoSlug};
 
 /// The mapped clone of `key`'s repository, or a notification saying how to map one.
 pub(crate) fn clone_of(key: &PullRequestKey, window: &mut Window, cx: &mut App) -> Option<PathBuf> {
+    clone_of_repo(key.repo(), window, cx)
+}
+
+/// The mapped clone of `repo`, or a notification saying how to map one.
+pub(crate) fn clone_of_repo(repo: &RepoSlug, window: &mut Window, cx: &mut App) -> Option<PathBuf> {
     let clone = cx
         .stores()
         .settings()
         .read(cx)
-        .clone_path(key.repo())
+        .clone_path(repo)
         .map(|path| path.to_path_buf());
     match clone {
         Some(clone) if clone.is_dir() => Some(clone),
@@ -28,8 +33,7 @@ pub(crate) fn clone_of(key: &PullRequestKey, window: &mut Window, cx: &mut App) 
         None => {
             window.push_notification(
                 Notification::warning(format!(
-                    "{} isn’t cloned. Map it to a local clone in Settings › Repositories.",
-                    key.repo()
+                    "{repo} isn’t cloned. Map it to a local clone in Settings › Repositories."
                 )),
                 cx,
             );
@@ -67,4 +71,11 @@ pub fn check_out(key: &PullRequestKey, head_ref: &str, window: &mut Window, cx: 
             .ok();
         })
         .detach();
+}
+
+/// Shows the clone of `repo` in Finder.
+pub fn reveal_repository(repo: &RepoSlug, window: &mut Window, cx: &mut App) {
+    if let Some(clone) = clone_of_repo(repo, window, cx) {
+        cx.reveal_path(&clone);
+    }
 }

@@ -416,6 +416,92 @@ pub struct Preferences {
     pub always_allowed_commands: Vec<(String, String)>,
     pub triage: TriageSettings,
     pub typesafe: TypeSafeSettings,
+    /// Repositories pinned to the top of the sidebar, as `owner/name`, in pin order.
+    pub pinned_repositories: Vec<String>,
+    /// Colors the reviewer gave repositories, as `owner/name` and color.
+    pub repository_colors: Vec<(String, RepositoryColor)>,
+    /// Sidebar sections the reviewer folded, by name.
+    pub folded_sections: Vec<String>,
+}
+
+/// A color the reviewer gives a repository, to tell it apart in the sidebar and the
+/// list. Each maps to a theme color, so it follows light and dark mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RepositoryColor {
+    Red,
+    Yellow,
+    Green,
+    Cyan,
+    Blue,
+    Purple,
+}
+
+impl RepositoryColor {
+    /// Every color in menu order.
+    pub const ALL: [RepositoryColor; 6] = [
+        Self::Red,
+        Self::Yellow,
+        Self::Green,
+        Self::Cyan,
+        Self::Blue,
+        Self::Purple,
+    ];
+
+    /// The menu label.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Red => "Red",
+            Self::Yellow => "Yellow",
+            Self::Green => "Green",
+            Self::Cyan => "Cyan",
+            Self::Blue => "Blue",
+            Self::Purple => "Purple",
+        }
+    }
+}
+
+impl Preferences {
+    /// Whether `slug` is pinned.
+    pub fn is_pinned(&self, slug: &str) -> bool {
+        self.pinned_repositories.iter().any(|pinned| pinned == slug)
+    }
+
+    /// Pins or unpins `slug`; pinning adds it at the end.
+    pub fn set_pinned(&mut self, slug: &str, pinned: bool) {
+        self.pinned_repositories.retain(|existing| existing != slug);
+        if pinned {
+            self.pinned_repositories.push(slug.to_string());
+        }
+    }
+
+    /// The color given to `slug`.
+    pub fn repository_color(&self, slug: &str) -> Option<RepositoryColor> {
+        self.repository_colors
+            .iter()
+            .find(|(repo, _)| repo == slug)
+            .map(|(_, color)| *color)
+    }
+
+    /// Gives `slug` a color, or takes it away with `None`.
+    pub fn set_repository_color(&mut self, slug: &str, color: Option<RepositoryColor>) {
+        self.repository_colors.retain(|(repo, _)| repo != slug);
+        if let Some(color) = color {
+            self.repository_colors.push((slug.to_string(), color));
+        }
+    }
+
+    /// Whether the sidebar section `name` is folded.
+    pub fn is_folded(&self, name: &str) -> bool {
+        self.folded_sections.iter().any(|folded| folded == name)
+    }
+
+    /// Folds or unfolds the sidebar section `name`.
+    pub fn set_folded(&mut self, name: &str, folded: bool) {
+        self.folded_sections.retain(|existing| existing != name);
+        if folded {
+            self.folded_sections.push(name.to_string());
+        }
+    }
 }
 
 /// Which triage features run, through which provider. Nothing runs until the
@@ -483,6 +569,9 @@ impl Default for Preferences {
             always_allowed_commands: Vec::new(),
             triage: TriageSettings::default(),
             typesafe: TypeSafeSettings::default(),
+            pinned_repositories: Vec::new(),
+            repository_colors: Vec::new(),
+            folded_sections: Vec::new(),
         }
     }
 }

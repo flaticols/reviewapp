@@ -39,6 +39,7 @@ pub struct PullRequestRow {
     now: Timestamp,
     selected: bool,
     triage: Option<PullRequestRisk>,
+    repo_color: Option<Hsla>,
     on_click: Option<ClickHandler>,
 }
 
@@ -50,6 +51,7 @@ impl PullRequestRow {
             now,
             selected: false,
             triage: None,
+            repo_color: None,
             on_click: None,
         }
     }
@@ -63,6 +65,12 @@ impl PullRequestRow {
     /// Shows the triage provider's kind and risk for the pull request.
     pub fn triage(mut self, triage: Option<PullRequestRisk>) -> Self {
         self.triage = triage;
+        self
+    }
+
+    /// Marks the row with the color the reviewer gave its repository.
+    pub fn repo_color(mut self, color: Option<Hsla>) -> Self {
+        self.repo_color = color;
         self
     }
 
@@ -136,7 +144,23 @@ impl RenderOnce for PullRequestRow {
                                             .child(triage.kind.label())
                                     })),
                             )
-                            .child(div().text_meta().text_color(muted).truncate().child(meta)),
+                            .child(
+                                h_flex()
+                                    .gap_1p5()
+                                    .when_some(self.repo_color, |this, color| {
+                                        this.child(
+                                            div().flex_shrink_0().size_2().rounded_full().bg(color),
+                                        )
+                                    })
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .text_meta()
+                                            .text_color(muted)
+                                            .truncate()
+                                            .child(meta),
+                                    ),
+                            ),
                     )
                     .child(
                         // Low and trivial risk stay quiet; the lane keeps the columns aligned.

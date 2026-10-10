@@ -299,3 +299,17 @@ pub fn ask_zed_agent(
             .detach();
     });
 }
+
+/// Opens the clone of `repo` as a Zed project.
+pub fn open_repository_in_zed(repo: &pr_model::RepoSlug, window: &mut Window, cx: &mut App) {
+    let Some(clone) = crate::local::clone_of_repo(repo, window, cx) else {
+        return;
+    };
+    let zed = zed_command(cx);
+    launch(
+        move || zed_bridge::open_project(&zed, &clone, None),
+        window,
+        cx,
+    )
+    .detach();
+}

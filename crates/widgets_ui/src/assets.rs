@@ -80,6 +80,8 @@ gpui_kit::assets::icon_assets!(
         MessageSquareWarning,
         TriangleAlert,
         OctagonAlert,
+        Pin,
+        PinOff,
     ]
 );
 

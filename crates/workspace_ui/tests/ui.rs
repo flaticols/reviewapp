@@ -604,3 +604,49 @@ fn list_filters_show_as_chips_that_clear_them(cx: &mut TestAppContext) {
         .unwrap();
     assert!(gone);
 }
+
+#[gpui_kit::test]
+fn pinned_repositories_get_a_section_that_folds(cx: &mut TestAppContext) {
+    use app_state_ui::StoresExt as _;
+    let (window, _) = open(cx);
+    let find = |id: &'static str, cx: &mut TestAppContext| {
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.try_find(id).is_some()
+        })
+        .unwrap()
+    };
+    assert!(
+        !find("fold-Pinned", cx),
+        "no Pinned section until something is pinned"
+    );
+    cx.update(|cx| {
+        let settings = cx.stores().settings().clone();
+        settings.update(cx, |settings, cx| {
+            settings.update_preferences(cx, |p| {
+                p.set_pinned("flaticols/switchfold", true);
+                p.set_repository_color(
+                    "flaticols/switchfold",
+                    Some(settings_model::RepositoryColor::Blue),
+                );
+            })
+        });
+    });
+    cx.run_until_parked();
+    assert!(find("fold-Pinned", cx));
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("fold-Pinned", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let folded = cx.update(|cx| {
+        cx.stores()
+            .settings()
+            .read(cx)
+            .preferences()
+            .is_folded("Pinned")
+    });
+    assert!(folded, "the chevron folds the section and remembers it");
+    assert!(find("fold-Repositories", cx), "Repositories folds too");
+}
