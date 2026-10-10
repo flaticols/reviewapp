@@ -303,16 +303,17 @@ impl FileDiffRow {
                         this.on_change(move |checked, window, cx| viewed(checked, window, cx))
                     }),
             )
-            .child(
-                Button::new("open-in-zed")
-                    .ghost()
-                    .small()
-                    .icon(IconName::ExternalLink)
-                    .label("Open in Zed")
-                    .when_some(open, |this, open| {
-                        this.on_click(move |event, window, cx| open(event, window, cx))
-                    }),
-            )
+            // Only where the owner can open files; a button that does nothing misleads.
+            .when_some(open, |this, open| {
+                this.child(
+                    Button::new("open-in-zed")
+                        .ghost()
+                        .small()
+                        .icon(IconName::ExternalLink)
+                        .label("Open in Zed")
+                        .on_click(move |event, window, cx| open(event, window, cx)),
+                )
+            })
             .child(
                 Button::new("file-more")
                     .ghost()
