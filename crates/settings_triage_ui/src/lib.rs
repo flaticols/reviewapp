@@ -70,7 +70,7 @@ impl Render for TriagePage {
         SettingsPage::new(
             "triage-page",
             "Triage",
-            "A fast classifier rates agent findings, labels review threads and scores pull requests, so the important ones come first. Text from those goes to the provider with your key; answers are cached and only asked again when the text changes.",
+            "A fast classifier rates agent findings, labels review threads and scores pull requests, so the important ones come first. Its labels are hints: the pull request’s author writes the text they’re judged on, so triage never hides a security, major or critical finding. Text goes to the provider with your key; answers are cached and only asked again when the text changes.",
         )
         .child(self.typesafe.clone())
         .child(
