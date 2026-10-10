@@ -650,3 +650,44 @@ fn pinned_repositories_get_a_section_that_folds(cx: &mut TestAppContext) {
     assert!(folded, "the chevron folds the section and remembers it");
     assert!(find("fold-Repositories", cx), "Repositories folds too");
 }
+
+#[gpui_kit::test]
+fn a_color_circle_sets_the_repository_color_and_closes_the_menu(cx: &mut TestAppContext) {
+    use app_state_ui::StoresExt as _;
+    let (window, _) = open(cx);
+    cx.update(|cx| {
+        let settings = cx.stores().settings().clone();
+        settings.update(cx, |settings, cx| {
+            settings.update_preferences(cx, |p| p.set_pinned("flaticols/switchfold", true))
+        });
+    });
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        // Sidebar rows are named section-row; section 1 is Pinned.
+        window.right_click("1-0", cx);
+    })
+    .unwrap();
+    settle(window, "repo-color-Red", cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("repo-color-Red", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let color = cx.update(|cx| {
+        cx.stores()
+            .settings()
+            .read(cx)
+            .preferences()
+            .repository_color("flaticols/switchfold")
+    });
+    assert_eq!(color, Some(settings_model::RepositoryColor::Red));
+    let still_open = cx
+        .update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.try_find("repo-color-Red").is_some()
+        })
+        .unwrap();
+    assert!(!still_open, "picking a color closes the menu");
+}

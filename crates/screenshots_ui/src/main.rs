@@ -29,6 +29,8 @@ enum Scene {
     RowMenu,
     /// The list's Filter menu, open from the title bar.
     FilterMenu,
+    /// A pinned repository's context menu, with the color grid.
+    RepoMenu,
     /// A file header's context menu.
     FileMenu,
     /// One commit picked in the commit menu.
@@ -68,11 +70,12 @@ enum Scene {
 }
 
 impl Scene {
-    const ALL: [Scene; 28] = [
+    const ALL: [Scene; 29] = [
         Self::List,
         Self::OneCommit,
         Self::RowMenu,
         Self::FilterMenu,
+        Self::RepoMenu,
         Self::FileMenu,
         Self::RequestReview,
         Self::Thread,
@@ -106,6 +109,7 @@ impl Scene {
             Self::ApprovePopover => "03b-approve-popover",
             Self::RowMenu => "01c-row-menu",
             Self::FilterMenu => "01d-filter-menu",
+            Self::RepoMenu => "01e-repo-menu",
             Self::FileMenu => "02h-file-menu",
             Self::OneCommit => "02i-one-commit",
             Self::RequestReview => "03c-request-review",
@@ -195,7 +199,10 @@ fn render(
         }
         let mut look = settings_model::Preferences::default();
         look.appearance = appearance;
-        if matches!(scene, Scene::List | Scene::RowMenu | Scene::FilterMenu) {
+        if matches!(
+            scene,
+            Scene::List | Scene::RowMenu | Scene::FilterMenu | Scene::RepoMenu
+        ) {
             look.set_pinned("flaticols/switchfold", true);
             look.set_repository_color(
                 "flaticols/switchfold",
@@ -327,6 +334,12 @@ fn render(
             use gpui_kit::test::TestWindowExt as _;
             window.render_frame(cx);
             window.click("list-filter", cx);
+        }
+        Scene::RepoMenu => {
+            use gpui_kit::test::TestWindowExt as _;
+            window.render_frame(cx);
+            // Sidebar rows are named section-row: section 1 is Pinned.
+            window.right_click("1-0", cx);
         }
         Scene::FileMenu => {
             use gpui_kit::test::TestWindowExt as _;

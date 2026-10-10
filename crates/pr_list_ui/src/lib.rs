@@ -25,8 +25,8 @@ use gpui_kit::component::{
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Render, ScrollStrategy,
-    SharedString, StyleRefinement, Styled as _, Subscription, UniformListScrollHandle, Window, div,
-    rems, uniform_list,
+    SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled as _, Subscription,
+    TestSupportExt as _, UniformListScrollHandle, Window, div, rems, uniform_list,
 };
 use pr_model::{Inbox, PullRequest, PullRequestKey, RepoSlug};
 use theme_ui::TypographyExt as _;
@@ -679,32 +679,13 @@ fn repository_menu(
             }))
             .on_click(set(Box::new(move |p| p.set_pinned(&pin_slug, !pinned)))),
     );
-    let menu = menu.separator().label("Color");
-    let none_slug = slug.clone();
-    let menu = menu.item(
-        PopupMenuItem::new("None")
-            .checked(current.is_none())
-            .on_click(set(Box::new(move |p| {
-                p.set_repository_color(&none_slug, None)
-            }))),
-    );
-    let menu = settings_model::RepositoryColor::ALL
-        .iter()
-        .fold(menu, |menu, color| {
-            let color = *color;
-            let color_slug = slug.clone();
-            menu.item(
-                PopupMenuItem::new(color.label())
-                    .icon(
-                        Icon::new(IconName::Circle)
-                            .text_color(theme_ui::repository_color(color, cx)),
-                    )
-                    .checked(current == Some(color))
-                    .on_click(set(Box::new(move |p| {
-                        p.set_repository_color(&color_slug, Some(color))
-                    }))),
-            )
-        });
+    let grid_slug = slug.clone();
+    let menu = menu
+        .separator()
+        .label("Color")
+        .item(PopupMenuItem::element(move |_, cx| {
+            color_grid(&grid_slug, current, cx)
+        }));
     let github = url.clone();
     let zed_repo = repo.clone();
     let finder_repo = repo.clone();
@@ -754,6 +735,82 @@ fn repository_menu(
                 .on_click(move |_, _, cx| {
                     view.update(cx, |_, cx| cx.emit(PullRequestListEvent::AddRepository))
                 }),
+        )
+}
+
+/// The repository colors as two rows of circles, the first "None". Clicking one sets
+/// it; the menu row around the grid then closes the menu.
+fn color_grid(
+    slug: &str,
+    current: Option<settings_model::RepositoryColor>,
+    cx: &App,
+) -> impl IntoElement + use<> {
+    let options: Vec<Option<settings_model::RepositoryColor>> = std::iter::once(None)
+        .chain(settings_model::RepositoryColor::ALL.into_iter().map(Some))
+        .collect();
+    let swatch = |option: Option<settings_model::RepositoryColor>, cx: &App| {
+        let selected = option == current;
+        let slug = slug.to_string();
+        let key = option.map_or("none", |color| color.label());
+        let tooltip = option.map_or("No color", |color| color.label());
+        div()
+            .id(SharedString::from(format!("repo-color-{key}")))
+            .test_support()
+            .size_6()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .border_2()
+            .border_color(if selected {
+                cx.theme().foreground
+            } else {
+                cx.theme().transparent
+            })
+            .tooltip(move |window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(tooltip).build(window, cx)
+            })
+            .child(match option {
+                Some(color) => div()
+                    .size_4()
+                    .rounded_full()
+                    .bg(theme_ui::repository_color(color, cx))
+                    .into_any_element(),
+                None => div()
+                    .size_4()
+                    .rounded_full()
+                    .border_1()
+                    .border_color(cx.theme().muted_foreground)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        Icon::new(IconName::X)
+                            .xsmall()
+                            .text_color(cx.theme().muted_foreground),
+                    )
+                    .into_any_element(),
+            })
+            .on_click(move |_, _, cx| {
+                let slug = slug.clone();
+                cx.stores().settings().clone().update(cx, |settings, cx| {
+                    settings.update_preferences(cx, |p| p.set_repository_color(&slug, option))
+                })
+            })
+    };
+    let (first, second) = options.split_at(4);
+    v_flex()
+        .py_1()
+        .gap_1()
+        .child(
+            h_flex()
+                .gap_1()
+                .children(first.iter().map(|option| swatch(*option, cx))),
+        )
+        .child(
+            h_flex()
+                .gap_1()
+                .children(second.iter().map(|option| swatch(*option, cx))),
         )
 }
 
