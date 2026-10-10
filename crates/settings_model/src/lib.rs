@@ -315,8 +315,10 @@ impl Appearance {
 /// The palette dark mode uses.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DarkTheme {
-    /// JetBrains' Islands Dark, as the Ghostty theme `jetbrains-islands-dark` has it.
+    /// Switchfold's own dark palette, from the product design's tokens.
     #[default]
+    Switchfold,
+    /// JetBrains' Islands Dark, as the Ghostty theme `jetbrains-islands-dark` has it.
     IslandsDark,
     /// Atom's One Dark, darkened as One Dark Pro Darker.
     OneDark,
@@ -328,7 +330,8 @@ pub enum DarkTheme {
 
 impl DarkTheme {
     /// Every option in menu order.
-    pub const ALL: [DarkTheme; 4] = [
+    pub const ALL: [DarkTheme; 5] = [
+        Self::Switchfold,
         Self::IslandsDark,
         Self::OneDark,
         Self::Espresso,
@@ -338,6 +341,7 @@ impl DarkTheme {
     /// The option label.
     pub fn label(self) -> &'static str {
         match self {
+            Self::Switchfold => "Switchfold Dark",
             Self::IslandsDark => "Islands Dark",
             Self::OneDark => "One Dark",
             Self::Espresso => "Espresso",
@@ -349,8 +353,10 @@ impl DarkTheme {
 /// The palette light mode uses.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LightTheme {
-    /// GitHub's light default.
+    /// Switchfold's own light palette, from the product design's tokens.
     #[default]
+    Switchfold,
+    /// GitHub's light default.
     GitHub,
     /// JetBrains' Islands Light: white content on cool grey panels.
     IslandsLight,
@@ -362,7 +368,8 @@ pub enum LightTheme {
 
 impl LightTheme {
     /// Every option in menu order.
-    pub const ALL: [LightTheme; 4] = [
+    pub const ALL: [LightTheme; 5] = [
+        Self::Switchfold,
         Self::GitHub,
         Self::IslandsLight,
         Self::OneLight,
@@ -372,6 +379,7 @@ impl LightTheme {
     /// The option label.
     pub fn label(self) -> &'static str {
         match self {
+            Self::Switchfold => "Switchfold Light",
             Self::GitHub => "GitHub Light",
             Self::IslandsLight => "Islands Light",
             Self::OneLight => "One Light",
@@ -420,8 +428,8 @@ impl Default for Preferences {
             zed_command: "/usr/local/bin/zed".into(),
             open_files_at: OpenFilesAt::PullRequestHead,
             appearance: Appearance::System,
-            dark_theme: DarkTheme::IslandsDark,
-            light_theme: LightTheme::GitHub,
+            dark_theme: DarkTheme::Switchfold,
+            light_theme: LightTheme::Switchfold,
             font_size: DEFAULT_FONT_SIZE,
             code_font_family: None,
             code_font_size: None,
