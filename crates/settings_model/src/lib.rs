@@ -422,6 +422,8 @@ pub struct Preferences {
     pub repository_colors: Vec<(String, RepositoryColor)>,
     /// Sidebar sections the reviewer folded, by name.
     pub folded_sections: Vec<String>,
+    /// Lists repositories in the sidebar under their organization or owner.
+    pub group_repositories_by_owner: bool,
 }
 
 /// A color the reviewer gives a repository, to tell it apart in the sidebar and the
@@ -572,6 +574,7 @@ impl Default for Preferences {
             pinned_repositories: Vec::new(),
             repository_colors: Vec::new(),
             folded_sections: Vec::new(),
+            group_repositories_by_owner: false,
         }
     }
 }

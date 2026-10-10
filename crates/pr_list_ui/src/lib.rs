@@ -19,6 +19,7 @@ use gpui_kit::component::{
     h_flex,
     input::{InputEvent, InputState},
     menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
+    resizable::{h_resizable, resizable_panel},
     sidebar::{Sidebar, SidebarCollapsible, SidebarMenu, SidebarMenuItem},
     v_flex,
 };
@@ -26,7 +27,7 @@ use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Render, ScrollStrategy,
     SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled as _, Subscription,
-    TestSupportExt as _, UniformListScrollHandle, Window, div, rems, uniform_list,
+    TestSupportExt as _, UniformListScrollHandle, Window, div, px, uniform_list,
 };
 use pr_model::{Inbox, PullRequest, PullRequestKey, RepoSlug};
 use theme_ui::TypographyExt as _;
@@ -315,17 +316,46 @@ impl PullRequestList {
                 .iter()
                 .map(|(repo, count)| item(repo.clone(), *count, cx)),
         );
-        let repo_menu = SidebarMenu::new().children(
-            repositories
+        let repo_menu = if preferences.group_repositories_by_owner {
+            let mut owners: Vec<String> = repositories
                 .iter()
-                .map(|(repo, count)| item(repo.clone(), *count, cx)),
-        );
+                .map(|(repo, _)| repo.owner().clone())
+                .collect();
+            owners.sort_by_key(|owner| owner.to_lowercase());
+            owners.dedup();
+            SidebarMenu::new().children(owners.into_iter().map(|owner| {
+                let members: Vec<&(RepoSlug, usize)> = repositories
+                    .iter()
+                    .filter(|(repo, _)| repo.owner() == &owner)
+                    .collect();
+                let total: usize = members.iter().map(|(_, count)| count).sum();
+                SidebarMenuItem::new(owner)
+                    .label_style(label_style())
+                    .icon(Icon::new(IconName::Users))
+                    .default_open(true)
+                    .click_to_toggle(true)
+                    .suffix(move |_, _| Counter::new(total))
+                    .children(
+                        members
+                            .iter()
+                            .map(|(repo, count)| item(repo.clone(), *count, cx)),
+                    )
+            }))
+        } else {
+            SidebarMenu::new().children(
+                repositories
+                    .iter()
+                    .map(|(repo, count)| item(repo.clone(), *count, cx)),
+            )
+        };
+        let grouped = preferences.group_repositories_by_owner;
+        let menu_add = view.clone();
 
         let add_repository = view.clone();
+        // The resizable panel around it owns the width and hiding.
         let mut sidebar = Sidebar::new("pr-sidebar")
-            .collapsible(SidebarCollapsible::Offcanvas)
-            .collapsed(self.sidebar_collapsed)
-            .w(rems(15.5))
+            .collapsible(SidebarCollapsible::None)
+            .w_full()
             .child(sidebar::NavSection::new("Pull requests", inbox_menu));
         if !pinned.is_empty() {
             sidebar = sidebar.child(
@@ -338,6 +368,30 @@ impl PullRequestList {
             .child(
                 sidebar::NavSection::new("Repositories", repo_menu)
                     .foldable(preferences.is_folded("Repositories"))
+                    .options_menu("repositories-options", move |menu, _, _| {
+                        let add = menu_add.clone();
+                        menu.item(
+                            PopupMenuItem::new("Group by organization")
+                                .checked(grouped)
+                                .on_click(move |_, _, cx| {
+                                    cx.stores().settings().clone().update(cx, |settings, cx| {
+                                        settings.update_preferences(cx, |p| {
+                                            p.group_repositories_by_owner = !grouped
+                                        })
+                                    })
+                                }),
+                        )
+                        .separator()
+                        .item(
+                            PopupMenuItem::new("Add repository…")
+                                .icon(Icon::new(IconName::Plus))
+                                .on_click(move |_, _, cx| {
+                                    add.update(cx, |_, cx| {
+                                        cx.emit(PullRequestListEvent::AddRepository)
+                                    })
+                                }),
+                        )
+                    })
                     .add_action("add-repository", "Add repository…", move |_, _, cx| {
                         add_repository
                             .update(cx, |_, cx| cx.emit(PullRequestListEvent::AddRepository))
@@ -839,37 +893,48 @@ impl Render for PullRequestList {
                     .clone()
                     .update(cx, |store: &mut PullRequestStore, cx| store.refresh(cx))
             }))
-            .child(self.render_sidebar(cx))
             .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .bg(cx.theme().background)
-                    .children(self.render_active_filters(cx))
+                h_resizable("pr-list-panels")
                     .child(
-                        div()
-                            .id("pull-request-rows")
-                            .key_context(CONTEXT)
-                            .track_focus(&self.focus_handle)
-                            .flex_1()
-                            .min_h_0()
-                            .pt_1()
-                            .pb_2()
-                            .on_action(
-                                cx.listener(|this, _: &SelectNext, _, cx| {
-                                    this.move_selection(1, cx)
-                                }),
-                            )
-                            .on_action(cx.listener(|this, _: &SelectPrevious, _, cx| {
-                                this.move_selection(-1, cx)
-                            }))
-                            .on_action(cx.listener(|this, _: &OpenSelected, _, cx| {
-                                if let Some(key) = this.selected.clone() {
-                                    this.open(key, cx);
-                                }
-                            }))
-                            .child(self.render_rows(window, cx)),
-                    ),
+                        resizable_panel()
+                            .visible(!self.sidebar_collapsed)
+                            .size(window.rem_size() * 15.5)
+                            .size_range(px(180.)..px(420.))
+                            .child(self.render_sidebar(cx)),
+                    )
+                    .child(resizable_panel().child(self.render_main(window, cx))),
+            )
+    }
+}
+
+impl PullRequestList {
+    fn render_main(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .size_full()
+            .min_w_0()
+            .bg(cx.theme().background)
+            .children(self.render_active_filters(cx))
+            .child(
+                div()
+                    .id("pull-request-rows")
+                    .key_context(CONTEXT)
+                    .track_focus(&self.focus_handle)
+                    .flex_1()
+                    .min_h_0()
+                    .pt_1()
+                    .pb_2()
+                    .on_action(
+                        cx.listener(|this, _: &SelectNext, _, cx| this.move_selection(1, cx)),
+                    )
+                    .on_action(
+                        cx.listener(|this, _: &SelectPrevious, _, cx| this.move_selection(-1, cx)),
+                    )
+                    .on_action(cx.listener(|this, _: &OpenSelected, _, cx| {
+                        if let Some(key) = this.selected.clone() {
+                            this.open(key, cx);
+                        }
+                    }))
+                    .child(self.render_rows(window, cx)),
             )
     }
 }

@@ -5,6 +5,8 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     Collapsible, Sizable as _,
     button::{Button, ButtonVariants as _},
+    h_flex,
+    menu::{DropdownMenu as _, PopupMenu},
     sidebar::{SidebarItem, SidebarMenu},
     v_flex,
 };
@@ -33,7 +35,11 @@ pub struct NavSection {
     collapsed: bool,
     /// Set for sections the reviewer can fold: whether it is folded now.
     folded: Option<bool>,
+    /// A `⋯` menu in the header for the section's options.
+    menu_builder: Option<(SharedString, MenuBuilder)>,
 }
+
+type MenuBuilder = Rc<dyn Fn(PopupMenu, &mut Window, &mut App) -> PopupMenu>;
 
 impl NavSection {
     /// A group labelled `label` listing `menu`'s items.
@@ -44,7 +50,18 @@ impl NavSection {
             menu,
             collapsed: false,
             folded: None,
+            menu_builder: None,
         }
+    }
+
+    /// Adds a `⋯` menu to the header, built by `builder` each time it opens.
+    pub fn options_menu(
+        mut self,
+        id: impl Into<SharedString>,
+        builder: impl Fn(PopupMenu, &mut Window, &mut App) -> PopupMenu + 'static,
+    ) -> Self {
+        self.menu_builder = Some((id.into(), Rc::new(builder)));
+        self
     }
 
     /// Lets the reviewer fold the section from its header; `folded` is its saved state.
@@ -88,9 +105,20 @@ impl SidebarItem for NavSection {
         cx: &mut App,
     ) -> impl IntoElement {
         let mut header = SectionHeader::new(self.label.clone());
+        let mut actions = h_flex().gap_0p5();
+        if let Some((id, builder)) = self.menu_builder {
+            actions = actions.child(
+                Button::new(id)
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::Ellipsis)
+                    .tooltip(format!("{} options", self.label))
+                    .dropdown_menu(move |menu, window, cx| builder(menu, window, cx)),
+            );
+        }
         if let Some(action) = self.action {
             let handler = action.handler.clone();
-            header = header.action(
+            actions = actions.child(
                 Button::new(action.id)
                     .ghost()
                     .xsmall()
@@ -99,6 +127,7 @@ impl SidebarItem for NavSection {
                     .on_click(move |event, window, cx| handler(event, window, cx)),
             );
         }
+        header = header.action(actions);
         let folded = self.folded.unwrap_or(false);
         if self.folded.is_some() {
             let name = self.label.to_string();

@@ -212,6 +212,7 @@ fn render(
                 "flaticols/gathering-app",
                 Some(settings_model::RepositoryColor::Green),
             );
+            look.group_repositories_by_owner = scene == Scene::FilterMenu;
             use app_state_ui::StoresExt as _;
             let settings = cx.stores().settings().clone();
             let saved = look.clone();
