@@ -1,4 +1,5 @@
-//! Personal access tokens in the macOS Keychain, one item per `login@host`.
+//! Secrets in the macOS Keychain: personal access tokens, one item per `login@host`,
+//! and API keys for triage providers, one item per provider.
 
 use std::fmt;
 
@@ -34,6 +35,37 @@ pub fn read_token(login: &str, host: &str) -> Result<Option<String>, KeychainErr
         Ok(token) => Ok(Some(token)),
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(error) => Err(KeychainError(format!("Couldn’t read the token: {error}"))),
+    }
+}
+
+fn api_key_entry(provider: &str) -> Result<keyring::Entry, KeychainError> {
+    keyring::Entry::new(SERVICE, &format!("api-key:{provider}"))
+        .map_err(|error| KeychainError(format!("Keychain is unavailable: {error}")))
+}
+
+/// Stores the API key for `provider`, such as `typesafe`, replacing any previous one.
+pub fn store_api_key(provider: &str, key: &str) -> Result<(), KeychainError> {
+    api_key_entry(provider)?
+        .set_password(key)
+        .map_err(|error| KeychainError(format!("Couldn’t save the API key: {error}")))
+}
+
+/// Reads the API key for `provider`, or `None` when none is stored.
+pub fn read_api_key(provider: &str) -> Result<Option<String>, KeychainError> {
+    match api_key_entry(provider)?.get_password() {
+        Ok(key) => Ok(Some(key)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(KeychainError(format!("Couldn’t read the API key: {error}"))),
+    }
+}
+
+/// Deletes the API key for `provider`; succeeds when none is stored.
+pub fn delete_api_key(provider: &str) -> Result<(), KeychainError> {
+    match api_key_entry(provider)?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(KeychainError(format!(
+            "Couldn’t delete the API key: {error}"
+        ))),
     }
 }
 

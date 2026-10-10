@@ -77,6 +77,18 @@ impl ReviewThreadView {
                     _ => Vec::new(),
                 }
             }
+            None if self.filter == crate::TimelineFilter::Unresolved => {
+                let mut findings: Vec<&review_model::AgentFinding> = detail
+                    .findings
+                    .iter()
+                    .filter(|f| f.state == review_model::FindingState::Draft)
+                    .collect();
+                crate::triage::sort_findings(&self.key, &mut findings, cx);
+                findings
+                    .into_iter()
+                    .map(|f| TimelineItem::Finding { id: f.id.clone() })
+                    .collect()
+            }
             None => crate::filters::items(&detail, self.filter),
         };
         let whole = self.commit.is_none();

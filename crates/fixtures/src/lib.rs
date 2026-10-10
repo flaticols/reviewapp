@@ -3,8 +3,10 @@
 
 mod markdown;
 mod patches;
+mod triage;
 
 pub use markdown::KITCHEN_SINK;
+pub use triage::SampleTriage;
 
 use std::path::Path;
 

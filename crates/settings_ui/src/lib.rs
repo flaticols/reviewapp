@@ -17,6 +17,7 @@ use settings_agents_ui::AgentsPage;
 use settings_appearance_ui::AppearancePage;
 use settings_keyboard_ui::KeyboardPage;
 use settings_repositories_ui::RepositoriesPage;
+use settings_triage_ui::TriagePage;
 
 /// The pages of Settings, in navigation order.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -25,16 +26,18 @@ pub enum SettingsPageKind {
     Accounts,
     Repositories,
     AgentsAndEditor,
+    Triage,
     Appearance,
     Keyboard,
 }
 
 impl SettingsPageKind {
     /// Every page in navigation order.
-    pub const ALL: [SettingsPageKind; 5] = [
+    pub const ALL: [SettingsPageKind; 6] = [
         Self::Accounts,
         Self::Repositories,
         Self::AgentsAndEditor,
+        Self::Triage,
         Self::Appearance,
         Self::Keyboard,
     ];
@@ -45,6 +48,7 @@ impl SettingsPageKind {
             Self::Accounts => "Accounts",
             Self::Repositories => "Repositories",
             Self::AgentsAndEditor => "Agents & editor",
+            Self::Triage => "Triage",
             Self::Appearance => "Appearance",
             Self::Keyboard => "Keyboard",
         }
@@ -55,6 +59,7 @@ impl SettingsPageKind {
             Self::Accounts => IconName::User,
             Self::Repositories => IconName::FolderGit2,
             Self::AgentsAndEditor => IconName::Bot,
+            Self::Triage => IconName::Sparkles,
             Self::Appearance => IconName::Eye,
             Self::Keyboard => IconName::Command,
         }
@@ -74,6 +79,7 @@ pub struct SettingsView {
     accounts: Entity<AccountsPage>,
     repositories: Entity<RepositoriesPage>,
     agents: Entity<AgentsPage>,
+    triage: Entity<TriagePage>,
     appearance: Entity<AppearancePage>,
 }
 
@@ -87,6 +93,7 @@ impl SettingsView {
             accounts: cx.new(|cx| AccountsPage::new(window, cx)),
             repositories: cx.new(RepositoriesPage::new),
             agents: cx.new(|cx| AgentsPage::new(window, cx)),
+            triage: cx.new(|cx| TriagePage::new(window, cx)),
             appearance: cx.new(|cx| AppearancePage::new(window, cx)),
         }
     }
@@ -110,6 +117,7 @@ impl SettingsView {
             SettingsPageKind::Accounts => self.accounts.clone().into_any_element(),
             SettingsPageKind::Repositories => self.repositories.clone().into_any_element(),
             SettingsPageKind::AgentsAndEditor => self.agents.clone().into_any_element(),
+            SettingsPageKind::Triage => self.triage.clone().into_any_element(),
             SettingsPageKind::Appearance => self.appearance.clone().into_any_element(),
             SettingsPageKind::Keyboard => KeyboardPage::new().into_any_element(),
         }

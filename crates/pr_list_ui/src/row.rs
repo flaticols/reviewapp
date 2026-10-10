@@ -10,10 +10,13 @@ use gpui_kit::{
 };
 use pr_model::{PullRequest, ReviewDecision, Timestamp};
 use theme_ui::{ActiveAppTheme as _, TypographyExt as _};
-use widgets_ui::{CheckIcon, PullRequestStateIcon};
+use triage::{PullRequestRisk, Risk};
+use widgets_ui::{CheckIcon, PullRequestStateIcon, StatusTag, Tone};
 
 /// Width of the review-decision lane; fits "Changes requested" with its icon.
 const REVIEW_LANE: f32 = 9.;
+/// Width of the risk lane, in rem; empty when the risk is low or unknown.
+const RISK_LANE: f32 = 7.;
 
 /// The icon and color that identify a review decision.
 pub fn review_decision_icon(decision: ReviewDecision, cx: &App) -> (IconName, Hsla) {
@@ -35,6 +38,7 @@ pub struct PullRequestRow {
     pull_request: PullRequest,
     now: Timestamp,
     selected: bool,
+    triage: Option<PullRequestRisk>,
     on_click: Option<ClickHandler>,
 }
 
@@ -45,6 +49,7 @@ impl PullRequestRow {
             pull_request,
             now,
             selected: false,
+            triage: None,
             on_click: None,
         }
     }
@@ -52,6 +57,12 @@ impl PullRequestRow {
     /// Shows the row as the list's selection.
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    /// Shows the triage provider's kind and risk for the pull request.
+    pub fn triage(mut self, triage: Option<PullRequestRisk>) -> Self {
+        self.triage = triage;
         self
     }
 
@@ -107,13 +118,39 @@ impl RenderOnce for PullRequestRow {
                             .min_w_0()
                             .gap_0p5()
                             .child(
-                                div()
-                                    .text_ui()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .truncate()
-                                    .child(pr.title.clone()),
+                                h_flex()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .text_ui()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .truncate()
+                                            .child(pr.title.clone()),
+                                    )
+                                    .children(self.triage.map(|triage| {
+                                        div()
+                                            .flex_shrink_0()
+                                            .text_meta()
+                                            .text_color(muted)
+                                            .child(triage.kind.label())
+                                    })),
                             )
                             .child(div().text_meta().text_color(muted).truncate().child(meta)),
+                    )
+                    .child(
+                        // Low and trivial risk stay quiet; the lane keeps the columns aligned.
+                        h_flex()
+                            .flex_shrink_0()
+                            .w(rems(RISK_LANE))
+                            .children(self.triage.and_then(|triage| {
+                                let tone = match triage.risk {
+                                    Risk::Trivial | Risk::Low => return None,
+                                    Risk::Medium => Tone::Warning,
+                                    Risk::High | Risk::Critical => Tone::Danger,
+                                };
+                                Some(StatusTag::new(tone, triage.risk.label()))
+                            })),
                     )
                     .child(
                         h_flex()

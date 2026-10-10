@@ -224,6 +224,18 @@ pub struct PullRequest {
     pub labels: Vec<String>,
     pub inboxes: Vec<Inbox>,
     pub agent_reviewed: bool,
+    /// The start of the description, for triage in the list.
+    #[serde(default)]
+    pub body_excerpt: String,
+    #[serde(default)]
+    pub changed_files: u32,
+    #[serde(default)]
+    pub additions: u32,
+    #[serde(default)]
+    pub deletions: u32,
+    /// The first changed paths.
+    #[serde(default)]
+    pub paths: Vec<String>,
 }
 
 impl PullRequest {
@@ -251,6 +263,11 @@ impl PullRequest {
             labels: Vec::new(),
             inboxes: Vec::new(),
             agent_reviewed: false,
+            body_excerpt: String::new(),
+            changed_files: 0,
+            additions: 0,
+            deletions: 0,
+            paths: Vec::new(),
         }
     }
 

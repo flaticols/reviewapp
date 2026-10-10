@@ -185,6 +185,7 @@ pub fn discover_clones_after_load(home: PathBuf, cx: &mut App) {
 
 /// Creates the stores from `data`.
 pub fn install_stores(data: StartingData, home: Option<PathBuf>, cx: &mut App) {
+    let triage_cache = data.cache.as_ref().map(|cache| cache.dir().to_path_buf());
     let pull_requests =
         cx.new(|cx| PullRequestStore::new(data.source, data.saved_filters, data.cache, cx));
     let settings = cx.new(|cx| {
@@ -197,6 +198,7 @@ pub fn install_stores(data: StartingData, home: Option<PathBuf>, cx: &mut App) {
         )
     });
     app_state_ui::Stores::install(pull_requests, settings, cx);
+    triage_ui::TriageStore::install(triage_cache, cx);
 }
 
 #[cfg(test)]

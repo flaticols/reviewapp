@@ -1,0 +1,18 @@
+[package]
+name = "settings_triage_ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+app_state_ui.workspace = true
+gpui-kit.workspace = true
+settings_model.workspace = true
+theme_ui.workspace = true
+triage_ui.workspace = true
+typesafe_ui.workspace = true
+widgets_ui.workspace = true
+
+[lints]
+workspace = true

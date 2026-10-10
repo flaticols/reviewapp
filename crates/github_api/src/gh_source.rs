@@ -131,6 +131,8 @@ query($query: String!, $first: Int!) {
         reviewThreads { totalCount }
         labels(first: 10) { nodes { name } }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+        bodyText additions deletions changedFiles
+        files(first: 40) { nodes { path } }
       }
     }
   }
@@ -199,6 +201,9 @@ fn ci_status(rollup: &Value) -> Option<CheckStatus> {
     }
 }
 
+/// How much of a description the list keeps, enough for triage to judge by.
+const BODY_EXCERPT_CHARS: usize = 1500;
+
 fn summary_from(node: &Value) -> Option<PullRequest> {
     let repo = RepoSlug::parse(node["repository"]["nameWithOwner"].as_str()?)?;
     let number = node["number"].as_u64()?;
@@ -237,6 +242,25 @@ fn summary_from(node: &Value) -> Option<PullRequest> {
             labels
                 .iter()
                 .filter_map(|label| label["name"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    pull_request.body_excerpt = node["bodyText"]
+        .as_str()
+        .unwrap_or_default()
+        .chars()
+        .take(BODY_EXCERPT_CHARS)
+        .collect();
+    let count = |field: &str| node[field].as_u64().unwrap_or(0) as u32;
+    pull_request.additions = count("additions");
+    pull_request.deletions = count("deletions");
+    pull_request.changed_files = count("changedFiles");
+    pull_request.paths = node["files"]["nodes"]
+        .as_array()
+        .map(|files| {
+            files
+                .iter()
+                .filter_map(|file| file["path"].as_str().map(str::to_string))
                 .collect()
         })
         .unwrap_or_default();

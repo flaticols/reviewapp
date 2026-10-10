@@ -10,6 +10,7 @@ name = "switchfold"
 path = "src/main.rs"
 
 [dependencies]
+typesafe_ui.workspace = true
 async-channel.workspace = true
 zed_bridge.workspace = true
 gpui-kit.workspace = true

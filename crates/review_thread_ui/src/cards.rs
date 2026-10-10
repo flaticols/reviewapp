@@ -35,6 +35,7 @@ pub struct CommentCard {
     verb: SharedString,
     body: SharedString,
     is_pending: bool,
+    badges: Vec<AnyElement>,
     repo: Option<RepoSlug>,
     actions: Vec<AnyElement>,
 }
@@ -53,6 +54,7 @@ impl CommentCard {
             verb: verb.into(),
             body: body.into(),
             is_pending: false,
+            badges: Vec::new(),
             repo: None,
             actions: Vec::new(),
         }
@@ -61,6 +63,12 @@ impl CommentCard {
     /// Marks the comment as part of the viewer's pending review.
     pub fn pending(mut self, is_pending: bool) -> Self {
         self.is_pending = is_pending;
+        self
+    }
+
+    /// Adds a tag after the author line, such as a triage label.
+    pub fn badge(mut self, badge: impl IntoElement) -> Self {
+        self.badges.push(badge.into_any_element());
         self
     }
 
@@ -101,6 +109,7 @@ impl RenderOnce for CommentCard {
                     .when(self.is_pending, |this| {
                         this.child(StatusTag::new(Tone::Accent, "Pending"))
                     })
+                    .children(self.badges)
                     .child(div().flex_1())
                     .child(
                         Button::new(SharedString::from(format!("{}-more", self.id)))

@@ -470,6 +470,7 @@ impl ReviewThreadView {
                 .into_any_element();
         }
         let reply_input = self.reply_inputs.get(&thread.id).cloned();
+        let label = crate::triage::thread(&self.key, &thread.id, cx);
         let mut cards: Vec<AnyElement> = Vec::new();
         let last = thread.comments.len().saturating_sub(1);
         for (ix, comment) in thread.comments.iter().enumerate() {
@@ -481,6 +482,14 @@ impl ReviewThreadView {
             )
             .pending(comment.is_pending)
             .repo(self.key.repo().clone());
+            if ix == 0
+                && let Some(label) = label
+            {
+                card = card.badge(crate::triage::thread_tag(&label));
+                if label.looks_addressed() {
+                    card = card.badge(StatusTag::new(Tone::Success, "Looks addressed"));
+                }
+            }
             if ix == last {
                 let resolve_id = thread.id.clone();
                 let reply_focus = reply_input.clone();
@@ -692,6 +701,8 @@ impl ReviewThreadView {
                 )
             }
         };
+        let rated = crate::triage::finding(&self.key, &finding.id, cx);
+        let noise = rated.is_some_and(|rated| rated.is_likely_noise());
         let (ask_path, ask_line) = (finding.path.clone(), finding.line);
         let ask_subject = format!(
             "{} flagged this in its review:\n\n{}",
@@ -714,6 +725,8 @@ impl ReviewThreadView {
         v_flex()
             .gap_2()
             .p_3()
+            // Likely noise stays readable but steps back.
+            .when(noise, |this| this.opacity(0.55))
             .border_1()
             .border_dashed()
             .border_color(cx.theme().muted_foreground.opacity(0.6))
@@ -733,7 +746,11 @@ impl ReviewThreadView {
                             .text_color(cx.theme().muted_foreground)
                             .child(format!("finding · {}", finding.anchor_label())),
                     )
-                    .child(tag),
+                    .child(tag)
+                    .children(rated.map(|rated| crate::triage::finding_tag(&rated)))
+                    .when(noise, |this| {
+                        this.child(StatusTag::new(Tone::Neutral, "Likely noise"))
+                    }),
             )
             .child(match editing {
                 Some(input) => div()

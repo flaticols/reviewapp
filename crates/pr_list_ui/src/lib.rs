@@ -86,7 +86,7 @@ impl PullRequestList {
         let filter_input = cx
             .new(|cx| InputState::new(window, cx).placeholder("Filter by title, #number, author…"));
         let store = cx.stores().pull_requests().clone();
-        let subscriptions = vec![
+        let mut subscriptions = vec![
             cx.observe(&store, |_, _, cx| cx.notify()),
             cx.subscribe(
                 &filter_input,
@@ -98,6 +98,9 @@ impl PullRequestList {
                 },
             ),
         ];
+        if let Some(triage) = triage_ui::TriageStoreExt::triage(&**cx) {
+            subscriptions.push(cx.observe(&triage, |_, _, cx| cx.notify()));
+        }
         Self {
             focus_handle: cx.focus_handle().tab_stop(true),
             filter_input,
@@ -557,6 +560,10 @@ impl PullRequestList {
                 .child(
                     PullRequestRow::new(pr.clone(), now)
                         .selected(self.selected.as_ref() == Some(&pr.key))
+                        .triage(
+                            triage_ui::TriageStoreExt::triage(&**cx)
+                                .and_then(|store| store.read(cx).pull_request(&pr.key)),
+                        )
                         .on_click(move |_, window, cx| {
                             let key = key.clone();
                             view.update(cx, |this, cx| {

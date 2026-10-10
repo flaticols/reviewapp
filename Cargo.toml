@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+# `crates/providers` only groups provider crates, so the patterns skip it and list
+# what is inside instead.
+members = ["crates/[!p]*", "crates/pr_*", "crates/providers/*"]
 
 
 [workspace.package]
@@ -58,6 +60,11 @@ agent-client-protocol = { version = "3", features = ["process"] }
 
 pr_model = { path = "crates/pr_model" }
 pr_cache = { path = "crates/pr_cache" }
+triage = { path = "crates/triage" }
+triage_ui = { path = "crates/triage_ui" }
+settings_triage_ui = { path = "crates/settings_triage_ui" }
+typesafe = { path = "crates/providers/typesafe" }
+typesafe_ui = { path = "crates/providers/typesafe_ui" }
 markdown_ui = { path = "crates/markdown_ui" }
 zed_bridge = { path = "crates/zed_bridge" }
 diff_model = { path = "crates/diff_model" }

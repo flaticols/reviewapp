@@ -61,6 +61,7 @@ fn main() {
         launch::install_stores(data, home.clone(), cx);
         if !launch.sample {
             launch::discover_clones_after_load(home_dir.clone(), cx);
+            typesafe_ui::init(cx);
         }
 
         let mut look = preferences.clone();

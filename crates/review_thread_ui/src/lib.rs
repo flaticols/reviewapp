@@ -13,6 +13,7 @@ mod review_actions;
 mod rows;
 mod timeline;
 mod title;
+mod triage;
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -215,7 +216,7 @@ impl ReviewThreadView {
                 .rows(2)
         });
         let file_tree = cx.new(|cx| TreeState::new(cx));
-        let subscriptions = vec![
+        let mut subscriptions = vec![
             cx.observe(&file_tree, |this: &mut Self, _, cx| {
                 this.on_file_tree_changed(cx)
             }),
@@ -255,6 +256,13 @@ impl ReviewThreadView {
                 },
             ),
         ];
+        // Triage answers arrive after the detail; tags and the Unresolved order follow.
+        if let Some(triage) = triage_ui::TriageStoreExt::triage(&**cx) {
+            subscriptions.push(cx.observe(&triage, |this: &mut Self, _, cx| {
+                this.sync_rows(cx);
+                cx.notify();
+            }));
+        }
         let mut view = Self {
             key,
             back_label: back_label.into(),

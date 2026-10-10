@@ -414,6 +414,52 @@ pub struct Preferences {
     pub default_agent: String,
     /// Commands the user allowed for every review in a repository, keyed by `owner/name`.
     pub always_allowed_commands: Vec<(String, String)>,
+    pub triage: TriageSettings,
+    pub typesafe: TypeSafeSettings,
+}
+
+/// Which triage features run, through which provider. Nothing runs until the
+/// provider has a key.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct TriageSettings {
+    /// The provider's id, such as `typesafe`.
+    pub provider: String,
+    /// Rate agent findings for severity and whether they're worth acting on.
+    pub findings: bool,
+    /// Label review threads as blocking, suggestion, nit, question or praise.
+    pub threads: bool,
+    /// Rate pull requests in the inbox for kind and risk.
+    pub pull_requests: bool,
+}
+
+impl Default for TriageSettings {
+    fn default() -> Self {
+        Self {
+            provider: "typesafe".into(),
+            findings: true,
+            threads: true,
+            pull_requests: true,
+        }
+    }
+}
+
+/// TypeSafe.ai settings besides the key, which lives in the Keychain.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct TypeSafeSettings {
+    /// The model asked, such as `jev-latest`.
+    pub model: String,
+}
+
+impl Default for TypeSafeSettings {
+    fn default() -> Self {
+        Self {
+            model: "jev-latest".into(),
+        }
+    }
 }
 
 impl Default for Preferences {
@@ -435,6 +481,8 @@ impl Default for Preferences {
             code_font_size: None,
             default_agent: "claude-code".into(),
             always_allowed_commands: Vec::new(),
+            triage: TriageSettings::default(),
+            typesafe: TypeSafeSettings::default(),
         }
     }
 }

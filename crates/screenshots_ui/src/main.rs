@@ -41,6 +41,8 @@ enum Scene {
     ThreadEspresso,
     /// A description using most of GitHub Flavored Markdown.
     Markdown,
+    /// The Unresolved filter: findings in triage order, with their tags.
+    Unresolved,
     /// The thread scrolled to its first file.
     ThreadFirstFile,
     Submit,
@@ -50,6 +52,8 @@ enum Scene {
     Accounts,
     Repositories,
     Agents,
+    /// Settings › Triage.
+    Triage,
     Appearance,
     Keyboard,
     Palette,
@@ -62,7 +66,7 @@ enum Scene {
 }
 
 impl Scene {
-    const ALL: [Scene; 25] = [
+    const ALL: [Scene; 27] = [
         Self::List,
         Self::OneCommit,
         Self::RowMenu,
@@ -74,6 +78,7 @@ impl Scene {
         Self::ThreadCodeFont,
         Self::ThreadEspresso,
         Self::Markdown,
+        Self::Unresolved,
         Self::ThreadFirstFile,
         Self::Submit,
         Self::StartAgent,
@@ -82,6 +87,7 @@ impl Scene {
         Self::Accounts,
         Self::Repositories,
         Self::Agents,
+        Self::Triage,
         Self::Appearance,
         Self::Keyboard,
         Self::Palette,
@@ -103,6 +109,7 @@ impl Scene {
             Self::ThreadCodeFont => "02c-thread-code-font",
             Self::ThreadEspresso => "02g-thread-palettes",
             Self::Markdown => "02k-markdown",
+            Self::Unresolved => "02l-unresolved",
             Self::ThreadFirstFile => "02d-thread-first-file",
             Self::Submit => "03-submit",
             Self::StartAgent => "05a-start-agent",
@@ -111,6 +118,7 @@ impl Scene {
             Self::Accounts => "07-accounts",
             Self::Repositories => "07b-repositories",
             Self::Agents => "07c-agents",
+            Self::Triage => "07f-triage",
             Self::Appearance => "07d-appearance",
             Self::Keyboard => "07e-keyboard",
             Self::Palette => "08-palette",
@@ -174,6 +182,13 @@ fn render(
             data.settings.accounts.clear();
         }
         launch::install_stores(data, Some(home.clone()), cx);
+        // Sample scenes show triage answers from the rule-based provider; live ones
+        // use whatever the reviewer configured.
+        if !live && let Some(store) = triage_ui::TriageStoreExt::triage(&*cx) {
+            let provider: Arc<dyn triage::TriageProvider> =
+                Arc::new(fixtures::SampleTriage::default());
+            store.update(cx, |store, cx| store.set_provider(Some(provider), cx));
+        }
         let mut look = settings_model::Preferences::default();
         look.appearance = appearance;
         if scene == Scene::ThreadEspresso {
@@ -235,6 +250,7 @@ fn render(
                 | Scene::ThreadCodeFont
                 | Scene::ThreadEspresso
                 | Scene::Markdown
+                | Scene::Unresolved
                 | Scene::ThreadFirstFile
                 | Scene::Submit
                 | Scene::StartAgent
@@ -249,6 +265,7 @@ fn render(
             Scene::Accounts => Some(SettingsPageKind::Accounts),
             Scene::Repositories => Some(SettingsPageKind::Repositories),
             Scene::Agents => Some(SettingsPageKind::AgentsAndEditor),
+            Scene::Triage => Some(SettingsPageKind::Triage),
             Scene::Appearance => Some(SettingsPageKind::Appearance),
             Scene::Keyboard => Some(SettingsPageKind::Keyboard),
             _ => None,
@@ -421,6 +438,16 @@ fn render(
             if let Some(review) = workspace.read(cx).review_view() {
                 review.update(cx, |review, cx| {
                     review.show_filter(review_thread_ui::TimelineFilter::Reviews, cx)
+                });
+            }
+        })?;
+    }
+    if scene == Scene::Unresolved {
+        cx.run_until_parked();
+        cx.update_window(window.into(), |_, _, cx| {
+            if let Some(review) = workspace.read(cx).review_view() {
+                review.update(cx, |review, cx| {
+                    review.show_filter(review_thread_ui::TimelineFilter::Unresolved, cx)
                 });
             }
         })?;

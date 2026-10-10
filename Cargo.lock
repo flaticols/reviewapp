@@ -320,6 +320,7 @@ dependencies = [
  "review_thread_ui",
  "settings_model",
  "theme_ui",
+ "typesafe_ui",
  "widgets_ui",
  "workspace_ui",
  "zed_bridge",
@@ -1316,6 +1317,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "cookie"
+version = "0.18.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a373e3602691c3cdea496d2f0ee5935151e6168fe87739483c463db1b2f2f87"
+dependencies = [
+ "percent-encoding",
+ "time",
+ "version_check",
+]
+
+[[package]]
+name = "cookie_store"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15b2c103cf610ec6cae3da84a766285b42fd16aad564758459e6ecf128c75206"
+dependencies = [
+ "cookie",
+ "document-features",
+ "idna",
+ "indexmap 2.14.2",
+ "log",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "time",
+ "url",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2180,6 +2210,7 @@ dependencies = [
  "pr_model",
  "review_model",
  "settings_model",
+ "triage",
 ]
 
 [[package]]
@@ -6550,6 +6581,8 @@ dependencies = [
  "pr_model",
  "settings_model",
  "theme_ui",
+ "triage",
+ "triage_ui",
  "widgets_ui",
 ]
 
@@ -7175,6 +7208,8 @@ dependencies = [
  "submit_review_ui",
  "syntax_ui",
  "theme_ui",
+ "triage",
+ "triage_ui",
  "widgets_ui",
 ]
 
@@ -7356,6 +7391,7 @@ version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
+ "log",
  "once_cell",
  "ring",
  "rustls-pki-types",
@@ -7560,6 +7596,8 @@ dependencies = [
  "settings_ui",
  "submit_review_ui",
  "theme_ui",
+ "triage",
+ "triage_ui",
  "widgets_ui",
  "workspace_ui",
 ]
@@ -7858,6 +7896,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "settings_triage_ui"
+version = "0.1.0"
+dependencies = [
+ "app_state_ui",
+ "gpui-kit",
+ "settings_model",
+ "theme_ui",
+ "triage_ui",
+ "typesafe_ui",
+ "widgets_ui",
+]
+
+[[package]]
 name = "settings_ui"
 version = "0.1.0"
 dependencies = [
@@ -7867,6 +7918,7 @@ dependencies = [
  "settings_appearance_ui",
  "settings_keyboard_ui",
  "settings_repositories_ui",
+ "settings_triage_ui",
 ]
 
 [[package]]
@@ -9215,6 +9267,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "triage"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "triage_ui"
+version = "0.1.0"
+dependencies = [
+ "app_state_ui",
+ "diff_model",
+ "fixtures",
+ "github_api",
+ "gpui-kit",
+ "pr_cache",
+ "pr_model",
+ "review_model",
+ "serde",
+ "serde_json",
+ "settings_model",
+ "triage",
+]
+
+[[package]]
 name = "triomphe"
 version = "0.1.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9251,6 +9330,31 @@ name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
+
+[[package]]
+name = "typesafe"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "triage",
+ "ureq",
+]
+
+[[package]]
+name = "typesafe_ui"
+version = "0.1.0"
+dependencies = [
+ "app_state_ui",
+ "gpui-kit",
+ "keychain",
+ "settings_model",
+ "theme_ui",
+ "triage",
+ "triage_ui",
+ "typesafe",
+ "widgets_ui",
+]
 
 [[package]]
 name = "ucd-trie"
@@ -9375,6 +9479,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
+name = "ureq"
+version = "3.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a7ac20be9b7726e0bbdbf974c059676d9acb1cd414961f570a4e8231cacd7fc"
+dependencies = [
+ "base64 0.23.1",
+ "cookie_store",
+ "flate2",
+ "log",
+ "percent-encoding",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "ureq-proto",
+ "utf8-zero",
+ "webpki-roots",
+]
+
+[[package]]
+name = "ureq-proto"
+version = "0.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f86fd172ccca569e458f61b6bdd6220965a9ef36e672a6852953b51a0e1583be"
+dependencies = [
+ "base64 0.23.1",
+ "http",
+ "httparse",
+ "log",
+]
+
+[[package]]
 name = "url"
 version = "2.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9445,6 +9581,12 @@ name = "utf-8"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09cc8ee72d2a9becf2f2febe0205bbed8fc6615b7cb429ad062dc7b7ddd036a9"
+
+[[package]]
+name = "utf8-zero"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8c0a043c9540bae7c578c88f91dda8bd82e59ae27c21baca69c8b191aaf5a6e"
 
 [[package]]
 name = "utf8_iter"
@@ -9791,6 +9933,15 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "1.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+dependencies = [
+ "rustls-pki-types",
 ]
 
 [[package]]
@@ -10700,6 +10851,8 @@ dependencies = [
  "settings_ui",
  "sign_in_ui",
  "theme_ui",
+ "triage",
+ "triage_ui",
  "widgets_ui",
  "zed_bridge",
 ]

@@ -16,7 +16,7 @@ use gpui_kit::{
 };
 use review_model::{FindingState, PullRequestDetail};
 use theme_ui::TypographyExt as _;
-use widgets_ui::{Counter, SectionHeader};
+use widgets_ui::{Counter, SectionHeader, StatusTag};
 
 use crate::{ReviewThreadEvent, ReviewThreadView, filters};
 
@@ -125,20 +125,25 @@ impl ReviewThreadView {
             _ => menu,
         });
 
-        let mut thread_rows: Vec<(SharedString, IconName, String, usize, String)> = detail
+        let mut thread_rows: Vec<ThreadRow> = detail
             .unresolved_threads()
             .map(|thread| {
                 let starter = thread
                     .starter()
                     .map(|actor| actor.display_name().to_string())
                     .unwrap_or_default();
-                (
-                    thread.id.clone().into(),
-                    IconName::MessageSquare,
-                    format!("{starter} · {}", thread.anchor_label()),
-                    thread.comments.len(),
-                    thread.path.clone(),
-                )
+                let label = crate::triage::thread(&self.key, &thread.id, cx);
+                ThreadRow {
+                    id: thread.id.clone().into(),
+                    icon: IconName::MessageSquare,
+                    label: format!("{starter} · {}", thread.anchor_label()),
+                    count: thread.comments.len(),
+                    path: thread.path.clone(),
+                    rank: crate::triage::thread_rank(label),
+                    tag: label
+                        .filter(|label| label.kind == triage::ThreadKind::Blocking)
+                        .map(|label| crate::triage::thread_tag(&label)),
+                }
             })
             .collect();
         thread_rows.extend(
@@ -147,21 +152,37 @@ impl ReviewThreadView {
                 .iter()
                 .filter(|finding| finding.state == FindingState::Draft)
                 .map(|finding| {
-                    (
-                        finding.id.clone().into(),
-                        IconName::Bot,
-                        format!("{} · {}", finding.agent.login, finding.anchor_label()),
-                        1,
-                        finding.path.clone(),
-                    )
+                    let rated = crate::triage::finding(&self.key, &finding.id, cx);
+                    ThreadRow {
+                        id: finding.id.clone().into(),
+                        icon: IconName::Bot,
+                        label: format!("{} · {}", finding.agent.login, finding.anchor_label()),
+                        count: 1,
+                        path: finding.path.clone(),
+                        rank: crate::triage::finding_rank(rated),
+                        tag: rated
+                            .filter(|rated| rated.severity >= triage::Severity::Major)
+                            .map(|rated| {
+                                StatusTag::new(widgets_ui::Tone::Danger, rated.severity.label())
+                            }),
+                    }
                 }),
         );
-        thread_rows.sort_by(|a, b| a.2.cmp(&b.2).reverse().then(std::cmp::Ordering::Equal));
-        thread_rows.sort_by_key(|row| detail.files.iter().position(|f| f.path == row.4));
+        thread_rows.sort_by(|a, b| b.label.cmp(&a.label));
+        thread_rows.sort_by_key(|row| detail.files.iter().position(|f| f.path == row.path));
+        // Blocking threads and severe findings first; file order within each rank.
+        thread_rows.sort_by_key(|row| row.rank);
 
-        let threads = thread_rows
-            .into_iter()
-            .map(|(id, icon, label, count, path)| {
+        let threads = thread_rows.into_iter().map(
+            |ThreadRow {
+                 id,
+                 icon,
+                 label,
+                 count,
+                 path,
+                 tag,
+                 ..
+             }| {
                 ListItem::new(SharedString::from(format!("outline-thread-{id}")))
                     .h_7()
                     .px_2()
@@ -177,9 +198,11 @@ impl ReviewThreadView {
                                     .text_color(cx.theme().muted_foreground),
                             )
                             .child(div().flex_1().min_w_0().truncate().child(label))
+                            .children(tag)
                             .child(Counter::new(count)),
                     )
-            });
+            },
+        );
 
         v_flex()
             .id("outline")
@@ -322,6 +345,18 @@ fn to_tree_items(dir: &FileTreeDir, folded: &HashSet<String>) -> Vec<TreeItem> {
         TreeItem::new(path.clone(), name.to_string())
     });
     dirs.chain(files).collect()
+}
+
+/// One open thread or draft finding in the sidebar list.
+struct ThreadRow {
+    id: SharedString,
+    icon: IconName,
+    label: String,
+    count: usize,
+    path: String,
+    /// Lower sorts first; see [`crate::triage::thread_rank`].
+    rank: u8,
+    tag: Option<StatusTag>,
 }
 
 #[cfg(test)]

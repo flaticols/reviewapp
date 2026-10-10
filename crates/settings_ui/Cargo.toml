@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+settings_triage_ui.workspace = true
 gpui-kit.workspace = true
 settings_accounts_ui.workspace = true
 settings_agents_ui.workspace = true
