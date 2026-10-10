@@ -186,7 +186,7 @@ impl ReviewThreadView {
                 let TimelineItem::File { path } = self.items[item].clone() else {
                     return div().into_any_element();
                 };
-                self.render_file_row(&detail, &path, row, last, now, window, cx)
+                self.render_file_row(&detail, &path, row, last, ix, now, window, cx)
             }
             TimelineRow::Empty => self.render_empty().into_any_element(),
             TimelineRow::RunDetails(ix) => match self.runs.get(ix) {
@@ -230,6 +230,7 @@ impl ReviewThreadView {
                     detail.body.clone(),
                 )
                 .repo(self.key.repo().clone())
+                .on_quote(self.quote_in_composer_handler(cx))
                 .action(
                     Button::new("description-reply")
                         .ghost()
@@ -339,6 +340,7 @@ impl ReviewThreadView {
                 comment.body.clone(),
             )
             .repo(self.key.repo().clone())
+            .on_quote(self.quote_in_composer_handler(cx))
             .into_any_element(),
         }
     }
@@ -350,6 +352,7 @@ impl ReviewThreadView {
         path: &str,
         row: DiffRow,
         last: bool,
+        row_ix: usize,
         now: Timestamp,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -364,7 +367,8 @@ impl ReviewThreadView {
         let mut element = FileDiffRow::new(file, highlights, row)
             .last(last)
             .collapsed(self.collapsed.contains(path))
-            .viewed(detail.is_viewed(path));
+            .viewed(detail.is_viewed(path))
+            .document_order(row_ix as u64);
         match row {
             DiffRow::Header => {
                 let menu_view = cx.entity();
@@ -392,12 +396,17 @@ impl ReviewThreadView {
             DiffRow::Line { .. } | DiffRow::Split { .. } => {
                 let comment_path = path.to_string();
                 let view = cx.entity();
-                element = element.on_comment_line(move |line, window, cx| {
-                    let path = comment_path.clone();
-                    view.update(cx, |this, cx| {
-                        this.start_line_comment(path, line, window, cx)
+                let (menu_view, menu_path) = (view.clone(), path.to_string());
+                element = element
+                    .on_comment_line(move |line, window, cx| {
+                        let path = comment_path.clone();
+                        view.update(cx, |this, cx| {
+                            this.start_line_comment(path, line, window, cx)
+                        })
                     })
-                });
+                    .line_menu(move |menu, target, _, cx| {
+                        ReviewThreadView::diff_line_menu(&menu_view, &menu_path, menu, target, cx)
+                    });
             }
             DiffRow::Threads(line) => {
                 let mut threads: Vec<AnyElement> = detail
@@ -481,7 +490,15 @@ impl ReviewThreadView {
                 comment.body.clone(),
             )
             .pending(comment.is_pending)
-            .repo(self.key.repo().clone());
+            .repo(self.key.repo().clone())
+            .on_quote({
+                let (view, thread_id) = (cx.entity(), thread.id.clone());
+                move |text, window, cx| {
+                    view.update(cx, |this, cx| {
+                        this.quote_in_reply(&thread_id, text, window, cx)
+                    })
+                }
+            });
             if ix == 0
                 && let Some(label) = label
             {

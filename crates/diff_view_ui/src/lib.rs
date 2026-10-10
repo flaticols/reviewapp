@@ -5,11 +5,13 @@
 //! bordered card.
 
 mod layout;
+mod selectable_code;
 
 use std::rc::Rc;
 
 use diff_model::{DiffLine, FileDiff, LineKind};
 use gpui_kit::assets::IconName;
+use gpui_kit::base::TextSelection;
 use gpui_kit::component::{
     ActiveTheme as _, Icon, Sizable as _,
     button::{Button, ButtonVariants as _},
@@ -19,10 +21,12 @@ use gpui_kit::component::{
     v_flex,
 };
 use gpui_kit::{
-    AnyElement, App, ClickEvent, ElementId, FontWeight, Hsla, InteractiveElement as _, IntoElement,
-    ParentElement as _, RenderOnce, SharedString, StatefulInteractiveElement as _, Styled as _,
-    StyledText, TestSupportExt as _, Window, div, prelude::FluentBuilder as _, rems,
+    AnyElement, App, ClickEvent, ClipboardItem, ElementId, FontWeight, Hsla,
+    InteractiveElement as _, IntoElement, ParentElement as _, RenderOnce, SharedString,
+    StatefulInteractiveElement as _, Styled as _, TestSupportExt as _, Window, div,
+    prelude::FluentBuilder as _, rems,
 };
+use selectable_code::SelectableCode;
 use syntax_ui::FileHighlights;
 use theme_ui::{ActiveAppTheme as _, TypographyExt as _, code_line_height};
 
@@ -43,7 +47,60 @@ type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 type ViewedHandler = Rc<dyn Fn(&bool, &mut Window, &mut App)>;
 type LineHandler = Rc<dyn Fn(u32, &mut Window, &mut App)>;
 type MenuBuilder = Rc<dyn Fn(PopupMenu, &mut Window, &mut App) -> PopupMenu>;
+type LineMenuBuilder = Rc<dyn Fn(PopupMenu, &LineMenuTarget, &mut Window, &mut App) -> PopupMenu>;
 type Spans = [(std::ops::Range<usize>, gpui_kit::HighlightStyle)];
+
+/// Where diff lines start in the window's selection order. Text views number themselves
+/// from 1 each frame, and the selection takes in everything whose order lies between
+/// its two ends, so diff lines sharing those numbers would pull unrelated comments into
+/// a selection between two lines.
+const DOCUMENT_ORDER_BASE: u64 = 1 << 40;
+
+/// Which version of the file a diff line belongs to: the base a removal is from, or the
+/// head that additions and context lines are in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiffSide {
+    /// The pull request's base: removed lines, and the left column of the split layout.
+    Base,
+    /// The pull request's head: added and context lines in the unified layout, and the
+    /// right column of the split layout.
+    Head,
+}
+
+/// The line a diff line's context menu was opened on, with the text selected in the
+/// window when it opened.
+#[derive(Clone, Debug)]
+pub struct LineMenuTarget {
+    line: DiffLine,
+    side: DiffSide,
+    selected_text: String,
+}
+
+impl LineMenuTarget {
+    /// The line, with its raw text: tabs as written, no sign.
+    pub fn line(&self) -> &DiffLine {
+        &self.line
+    }
+
+    /// The version of the file the line was clicked in.
+    pub fn side(&self) -> DiffSide {
+        self.side
+    }
+
+    /// The line's number on [`Self::side`].
+    pub fn number(&self) -> Option<u32> {
+        match self.side {
+            DiffSide::Base => self.line.old_line,
+            DiffSide::Head => self.line.new_line,
+        }
+    }
+
+    /// The text selected anywhere in the window, empty when nothing is. It can span
+    /// several lines and reach past this one.
+    pub fn selected_text(&self) -> &str {
+        &self.selected_text
+    }
+}
 
 /// One row of a file's diff, by position in the file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -134,6 +191,8 @@ pub struct FileDiffRow {
     on_open_in_zed: Option<ClickHandler>,
     on_comment_line: Option<LineHandler>,
     menu: Option<MenuBuilder>,
+    line_menu: Option<LineMenuBuilder>,
+    document_order: u64,
 }
 
 impl FileDiffRow {
@@ -152,6 +211,8 @@ impl FileDiffRow {
             on_open_in_zed: None,
             on_comment_line: None,
             menu: None,
+            line_menu: None,
+            document_order: 0,
         }
     }
 
@@ -162,6 +223,22 @@ impl FileDiffRow {
         build: impl Fn(PopupMenu, &mut Window, &mut App) -> PopupMenu + 'static,
     ) -> Self {
         self.menu = Some(Rc::new(build));
+        self
+    }
+
+    /// Adds actions to a code line's context menu, after Copy and Copy line.
+    pub fn line_menu(
+        mut self,
+        build: impl Fn(PopupMenu, &LineMenuTarget, &mut Window, &mut App) -> PopupMenu + 'static,
+    ) -> Self {
+        self.line_menu = Some(Rc::new(build));
+        self
+    }
+
+    /// Where the row's code falls in the window's reading order, so a selection across
+    /// rows copies them top to bottom. Give each row a larger value than the row above.
+    pub fn document_order(mut self, order: u64) -> Self {
+        self.document_order = order;
         self
     }
 
@@ -328,6 +405,20 @@ impl FileDiffRow {
             .context_menu(move |menu, window, cx| menu_for_context(&context, menu, window, cx))
     }
 
+    fn line_actions(&self, side: DiffSide) -> LineActions {
+        LineActions {
+            side,
+            on_comment_line: match side {
+                DiffSide::Base => None,
+                DiffSide::Head => self.on_comment_line.clone(),
+            },
+            menu: self.line_menu.clone(),
+            document_order: DOCUMENT_ORDER_BASE
+                + self.document_order * 2
+                + u64::from(side == DiffSide::Head),
+        }
+    }
+
     fn row_id(&self, kind: &str) -> ElementId {
         let ix = match self.row {
             DiffRow::Hunk(hunk) => hunk << 20,
@@ -346,7 +437,7 @@ impl FileDiffRow {
 }
 
 impl RenderOnce for FileDiffRow {
-    fn render(mut self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(mut self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let file = self.file.clone();
         let body: AnyElement = match self.row {
             DiffRow::Header => self.render_header(cx).into_any_element(),
@@ -361,8 +452,7 @@ impl RenderOnce for FileDiffRow {
             DiffRow::Line { hunk, line } => unified_line(
                 &file.hunks[hunk].lines[line],
                 self.highlights.line(hunk, line),
-                self.on_comment_line.clone(),
-                window,
+                self.line_actions(DiffSide::Head),
                 cx,
             )
             .into_any_element(),
@@ -372,15 +462,9 @@ impl RenderOnce for FileDiffRow {
                 let right = right.map(|ix| (&lines[ix], self.highlights.line(hunk, ix)));
                 h_flex()
                     .items_stretch()
-                    .child(split_side(left, true, None, window, cx))
+                    .child(split_side(left, self.line_actions(DiffSide::Base), cx))
                     .child(div().w_px().bg(cx.theme().border))
-                    .child(split_side(
-                        right,
-                        false,
-                        self.on_comment_line.clone(),
-                        window,
-                        cx,
-                    ))
+                    .child(split_side(right, self.line_actions(DiffSide::Head), cx))
                     .into_any_element()
             }
             DiffRow::Threads(_) => {
@@ -465,11 +549,7 @@ fn number_cell(number: Option<u32>, cx: &App) -> impl IntoElement {
         .children(number.map(|n| n.to_string()))
 }
 
-fn code_cell(
-    text: &str,
-    spans: &[(std::ops::Range<usize>, gpui_kit::HighlightStyle)],
-    cx: &App,
-) -> impl IntoElement {
+fn code_cell(text: &str, spans: &Spans, document_order: u64, cx: &App) -> impl IntoElement {
     let (text, spans) = expand_tabs(text, spans);
     div()
         .flex_1()
@@ -478,20 +558,79 @@ fn code_cell(
         .overflow_hidden()
         .whitespace_nowrap()
         .text_code(cx)
-        .child(StyledText::new(SharedString::from(text)).with_highlights(spans))
+        .child(SelectableCode::new("code", text, spans).document_order(document_order))
+}
+
+/// What a code line offers besides its text: commenting from the gutter, the context
+/// menu, and its place in the selection order.
+struct LineActions {
+    side: DiffSide,
+    on_comment_line: Option<LineHandler>,
+    menu: Option<LineMenuBuilder>,
+    document_order: u64,
+}
+
+impl LineActions {
+    /// The line's context menu: Copy and Copy line, then the owner's actions.
+    fn context_menu(
+        &self,
+        line: &DiffLine,
+    ) -> impl Fn(PopupMenu, &mut Window, &mut gpui_kit::Context<PopupMenu>) -> PopupMenu + 'static
+    {
+        let (line, side, extra) = (line.clone(), self.side, self.menu.clone());
+        move |menu, window, cx| {
+            // Read now: the press on a menu item clears the selection before its handler.
+            let target = LineMenuTarget {
+                line: line.clone(),
+                side,
+                selected_text: TextSelection::selected_text(window, cx),
+            };
+            let selection = target.selected_text.clone();
+            let text = target.line.text.clone();
+            let menu = menu
+                .item(
+                    PopupMenuItem::new("Copy")
+                        .icon(Icon::new(IconName::Copy))
+                        .disabled(selection.is_empty())
+                        .on_click(move |_, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(selection.clone()))
+                        }),
+                )
+                .item(
+                    PopupMenuItem::new("Copy line")
+                        .icon(Icon::new(IconName::Code))
+                        .on_click(move |_, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
+                        }),
+                );
+            match &extra {
+                Some(build) => build(menu.separator(), &target, window, cx),
+                None => menu,
+            }
+        }
+    }
 }
 
 fn unified_line(
     line: &DiffLine,
-    spans: &[(std::ops::Range<usize>, gpui_kit::HighlightStyle)],
-    on_comment_line: Option<LineHandler>,
-    _: &mut Window,
+    spans: &Spans,
+    actions: LineActions,
     cx: &App,
 ) -> impl IntoElement {
     let (background, gutter, sign_color) = line_colors(line.kind, cx);
     let comment_line = line.new_line.filter(|_| line.kind != LineKind::Removed);
+    let on_comment_line = actions.on_comment_line.clone();
     let commentable = comment_line.is_some() && on_comment_line.is_some();
+    let actions = LineActions {
+        side: if line.kind == LineKind::Removed {
+            DiffSide::Base
+        } else {
+            DiffSide::Head
+        },
+        ..actions
+    };
     h_flex()
+        .id("line")
         .group(LINE_GROUP)
         .h(code_line_height(cx))
         .bg(background)
@@ -532,16 +671,16 @@ fn unified_line(
                 )
                 .test_support(),
         )
-        .child(code_cell(&line.text, spans, cx))
+        .child(code_cell(&line.text, spans, actions.document_order, cx))
+        .context_menu(actions.context_menu(line))
 }
 
 fn split_side(
     line: Option<(&DiffLine, &Spans)>,
-    old_side: bool,
-    on_comment_line: Option<LineHandler>,
-    _: &mut Window,
+    actions: LineActions,
     cx: &App,
 ) -> impl IntoElement {
+    let old_side = actions.side == DiffSide::Base;
     let Some((line, spans)) = line else {
         return h_flex()
             .flex_1()
@@ -557,8 +696,10 @@ fn split_side(
         line.new_line
     };
     let comment_line = (!old_side).then_some(line.new_line).flatten();
+    let on_comment_line = actions.on_comment_line.clone();
     let commentable = comment_line.is_some() && on_comment_line.is_some();
     h_flex()
+        .id(if old_side { "line-base" } else { "line-head" })
         .group(LINE_GROUP)
         .flex_1()
         .min_w_0()
@@ -595,7 +736,8 @@ fn split_side(
                 )
                 .test_support(),
         )
-        .child(code_cell(&line.text, spans, cx))
+        .child(code_cell(&line.text, spans, actions.document_order, cx))
+        .context_menu(actions.context_menu(line))
         .into_any_element()
 }
 

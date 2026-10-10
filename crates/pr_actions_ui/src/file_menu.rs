@@ -55,6 +55,16 @@ impl FileTarget {
             self.repo, self.number
         )
     }
+
+    /// A link to one line of the file. Head-side lines link the file at the head commit,
+    /// which GitHub shows as a code snippet in comments; a base-side line only exists in
+    /// the diff, so it links the diff's left column there.
+    pub fn line_url(&self, line: u32, base: bool) -> Option<String> {
+        if base {
+            return Some(format!("{}L{line}", self.diff_url()));
+        }
+        self.permalink().map(|link| format!("{link}#L{line}"))
+    }
 }
 
 /// Adds the GitHub actions for `target` to `menu`: copy its path or permalink, open it
@@ -116,5 +126,25 @@ mod tests {
             diff.starts_with("https://github.com/FlyrInc/ooms-offerengine/pull/3838/files#diff-")
         );
         assert_eq!(diff.rsplit('-').next().map(str::len), Some(64));
+    }
+
+    #[test]
+    fn line_links_pick_the_blob_for_head_lines_and_the_diff_for_base_lines() {
+        let file = FileTarget::new(
+            RepoSlug::new("FlyrInc", "ooms-offerengine"),
+            3838,
+            Some("016e1f0".into()),
+            "a.go",
+        );
+        assert_eq!(
+            file.line_url(12, false).as_deref(),
+            Some("https://github.com/FlyrInc/ooms-offerengine/blob/016e1f0/a.go#L12")
+        );
+        assert_eq!(
+            file.line_url(7, true),
+            Some(format!("{}L7", file.diff_url()))
+        );
+        let unpinned = FileTarget::new(RepoSlug::new("o", "r"), 1, None, "a.go");
+        assert_eq!(unpinned.line_url(12, false), None);
     }
 }

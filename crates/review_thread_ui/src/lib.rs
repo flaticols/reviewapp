@@ -10,6 +10,7 @@ mod inspector;
 mod menus;
 mod merge;
 mod outline;
+mod quote;
 mod review_actions;
 mod rows;
 mod timeline;
@@ -35,7 +36,8 @@ use gpui_kit::component::{
 use gpui_kit::{
     App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, KeyBinding, ListAlignment, ListOffset, ListState,
-    ParentElement as _, Pixels, Render, SharedString, Styled as _, Subscription, Window, div, px,
+    ParentElement as _, Pixels, Render, SharedString, Styled as _, Subscription, WeakEntity,
+    Window, div, px,
 };
 use pr_model::PullRequestKey;
 use review_model::{FindingState, PullRequestDetail, TimelineItem};
@@ -169,6 +171,8 @@ pub struct ReviewThreadView {
     reply_inputs: HashMap<String, Entity<TextareaState>>,
     new_thread: Option<(String, u32, Entity<TextareaState>)>,
     editing_finding: Option<(String, Entity<TextareaState>)>,
+    /// The draft the reviewer focused last, where quotes and references from the diff go.
+    last_draft: Option<WeakEntity<TextareaState>>,
     list_state: ListState,
     file_tree: Entity<TreeState>,
     file_tree_paths: Vec<String>,
@@ -248,13 +252,12 @@ impl ReviewThreadView {
             cx.subscribe_in(
                 &composer,
                 window,
-                |this: &mut Self, _, event: &InputEvent, window, cx| {
-                    if let InputEvent::PressEnter {
+                |this: &mut Self, composer, event: &InputEvent, window, cx| match event {
+                    InputEvent::PressEnter {
                         secondary: true, ..
-                    } = event
-                    {
-                        this.post_comment(window, cx);
-                    }
+                    } => this.post_comment(window, cx),
+                    InputEvent::Focus => this.last_draft = Some(composer.downgrade()),
+                    _ => {}
                 },
             ),
         ];
@@ -283,6 +286,7 @@ impl ReviewThreadView {
             reply_inputs: HashMap::new(),
             new_thread: None,
             editing_finding: None,
+            last_draft: None,
             list_state: ListState::new(0, ListAlignment::Top, px(800.)),
             file_tree,
             file_tree_paths: Vec::new(),
@@ -430,7 +434,8 @@ impl ReviewThreadView {
         let subscription = cx.subscribe_in(
             &input,
             window,
-            move |this: &mut Self, _, event: &InputEvent, window, cx| {
+            move |this: &mut Self, input, event: &InputEvent, window, cx| {
+                this.note_focus(input, event);
                 if submits(event) {
                     this.submit_reply(&thread_id, window, cx);
                 }
@@ -438,6 +443,13 @@ impl ReviewThreadView {
         );
         self._subscriptions.push(subscription);
         input
+    }
+
+    /// Remembers `input` as the draft quotes go to once the reviewer focuses it.
+    fn note_focus(&mut self, input: &Entity<TextareaState>, event: &InputEvent) {
+        if matches!(event, InputEvent::Focus) {
+            self.last_draft = Some(input.downgrade());
+        }
     }
 
     /// Posts the reply typed under thread `thread_id` and clears the field.
@@ -500,7 +512,8 @@ impl ReviewThreadView {
         let subscription = cx.subscribe_in(
             &input,
             window,
-            |this: &mut Self, _, event: &InputEvent, _, cx| {
+            |this: &mut Self, input, event: &InputEvent, _, cx| {
+                this.note_focus(input, event);
                 if submits(event) {
                     this.submit_line_comment(cx);
                 }
@@ -552,7 +565,8 @@ impl ReviewThreadView {
         let subscription = cx.subscribe_in(
             &input,
             window,
-            |this: &mut Self, _, event: &InputEvent, _, cx| {
+            |this: &mut Self, input, event: &InputEvent, _, cx| {
+                this.note_focus(input, event);
                 if submits(event) {
                     this.save_finding_edit(cx);
                 }
@@ -661,12 +675,7 @@ impl ReviewThreadView {
         self.reveal_file(path, cx);
         self.start_line_comment(path.to_string(), line, window, cx);
         self.sync_rows(cx);
-        let row = self.rows.iter().position(|row| {
-            matches!(row, rows::TimelineRow::File { item, row: diff_view_ui::DiffRow::Threads(l), .. }
-                if *l == line
-                    && matches!(&self.items[*item], TimelineItem::File { path: p } if p == path))
-        });
-        let Some(row) = row else {
+        let Some(row) = self.threads_row(path, line) else {
             self.new_thread = None;
             self.sync_rows(cx);
             return false;

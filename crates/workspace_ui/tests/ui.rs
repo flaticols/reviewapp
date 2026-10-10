@@ -285,6 +285,148 @@ fn clicking_a_line_number_starts_a_pending_thread(cx: &mut TestAppContext) {
     assert_eq!(body.as_deref(), Some("Rename this\nand its callers"));
 }
 
+/// Picks item `ix` of the context menu open in `window`, once it has come to rest.
+fn pick_menu_item(window: AnyWindowHandle, ix: usize, cx: &mut TestAppContext) {
+    settle(window, "popup-menu", cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.within("popup-menu").click(ix, cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn selected_diff_lines_copy_and_quote_into_a_line_comment(cx: &mut TestAppContext) {
+    use gpui_kit::{point, px};
+    let (window, _) = open_featured(cx);
+    // The code starts past each gutter; drag from the first line's indent into the
+    // second line's `let`, then open the second line's menu.
+    let select_and_open_menu = |cx: &mut TestAppContext| {
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            let first = window.find("gutter-136-136").bounds();
+            let second = window.find("gutter-137-137").bounds();
+            let from = point(first.right() + px(12.), first.center().y);
+            let to = point(second.right() + px(110.), second.center().y);
+            window.drag(from, to, cx);
+            window.right_click("gutter-137-137", cx);
+        })
+        .unwrap();
+    };
+    select_and_open_menu(cx);
+    // Copy, Copy line, separator, Comment on line, Suggest change, Quote in comment.
+    pick_menu_item(window, 0, cx);
+    let copied = cx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .unwrap_or_default();
+    assert!(
+        copied.contains("pub fn apply_push") && copied.contains("\n        let"),
+        "Copy takes the selection across both lines: {copied:?}"
+    );
+    assert_eq!(copied.lines().count(), 2, "and nothing else: {copied:?}");
+
+    // Picking Copy clicked the menu, which ends the selection as any click does.
+    select_and_open_menu(cx);
+    pick_menu_item(window, 5, cx);
+    cx.update_window(window, |_, window, cx| {
+        use gpui_kit::component::WindowExt as _;
+        window.render_frame(cx);
+        assert!(
+            window.has_focused_input(cx),
+            "the quote opens a comment on the line, focused"
+        );
+        window.input("Why both?", cx);
+        window.press("cmd-enter", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let body = cx.update(|cx| {
+        use app_state_ui::StoresExt as _;
+        cx.stores()
+            .pull_requests()
+            .read(cx)
+            .loaded_detail(&featured())
+            .and_then(|detail| {
+                detail
+                    .threads
+                    .iter()
+                    .find(|thread| thread.line == 137)
+                    .map(|thread| thread.comments[0].body.clone())
+            })
+    });
+    assert_eq!(
+        body,
+        Some(format!("```rs\n{}\n```\n\nWhy both?", copied.trim_end())),
+        "the selection lands as a Rust code block above the comment"
+    );
+}
+
+#[gpui_kit::test]
+fn quote_reply_on_the_description_quotes_it_in_the_composer(cx: &mut TestAppContext) {
+    use app_state_ui::StoresExt as _;
+    let (window, _) = open_featured(cx);
+    let description = cx.update(|cx| {
+        cx.stores()
+            .pull_requests()
+            .read(cx)
+            .loaded_detail(&featured())
+            .map(|detail| detail.body.to_string())
+            .unwrap_or_default()
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.right_click("description-body", cx);
+    })
+    .unwrap();
+    // Copy, Copy text, separator, Quote reply.
+    pick_menu_item(window, 3, cx);
+    cx.update_window(window, |_, window, cx| {
+        use gpui_kit::component::WindowExt as _;
+        window.render_frame(cx);
+        assert!(window.has_focused_input(cx), "the composer takes focus");
+        window.input("Agreed", cx);
+        window.press("cmd-enter", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let posted = cx.update(|cx| {
+        cx.stores()
+            .pull_requests()
+            .read(cx)
+            .loaded_detail(&featured())
+            .and_then(|detail| {
+                detail.timeline.iter().rev().find_map(|item| match item {
+                    TimelineItem::Commented { comment } => Some(comment.body.clone()),
+                    _ => None,
+                })
+            })
+            .unwrap_or_default()
+    });
+    let (quote, reply) = posted
+        .rsplit_once("\n\n")
+        .expect("the reply follows the quote");
+    assert_eq!(reply, "Agreed");
+    assert!(
+        quote.lines().all(|line| line.starts_with('>')),
+        "every line is quoted: {quote:?}"
+    );
+    let unquoted: Vec<&str> = quote
+        .lines()
+        .map(|line| line.trim_start_matches('>').trim_start())
+        .collect();
+    let original: Vec<&str> = description
+        .trim_end()
+        .lines()
+        .map(str::trim_start)
+        .collect();
+    assert_eq!(
+        unquoted, original,
+        "with nothing selected the whole description is quoted"
+    );
+}
+
 #[gpui_kit::test]
 fn approve_asks_in_a_popover_listing_approvals(cx: &mut TestAppContext) {
     let (window, _) = open_featured(cx);

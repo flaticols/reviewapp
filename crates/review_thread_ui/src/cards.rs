@@ -6,12 +6,16 @@ use gpui_kit::component::{
     ActiveTheme as _, Icon, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
-    menu::{DropdownMenu as _, PopupMenu, PopupMenuItem},
+    menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem},
     v_flex,
 };
+use std::rc::Rc;
+
+use gpui_kit::base::TextSelection;
 use gpui_kit::{
-    AnyElement, App, ClipboardItem, IntoElement, ParentElement as _, RenderOnce, SharedString,
-    Styled as _, Window, div, prelude::FluentBuilder as _,
+    AnyElement, App, ClipboardItem, InteractiveElement as _, IntoElement, ParentElement as _,
+    RenderOnce, SharedString, Styled as _, TestSupportExt as _, Window, div,
+    prelude::FluentBuilder as _,
 };
 use pr_model::{CheckStatus, RepoSlug};
 use review_model::{Actor, CheckRun, Commit};
@@ -38,7 +42,10 @@ pub struct CommentCard {
     badges: Vec<AnyElement>,
     repo: Option<RepoSlug>,
     actions: Vec<AnyElement>,
+    on_quote: Option<QuoteHandler>,
 }
+
+type QuoteHandler = Rc<dyn Fn(&str, &mut Window, &mut App)>;
 
 impl CommentCard {
     /// A card for `body` by `author`; `verb` reads like `commented 2h ago`.
@@ -57,6 +64,7 @@ impl CommentCard {
             badges: Vec::new(),
             repo: None,
             actions: Vec::new(),
+            on_quote: None,
         }
     }
 
@@ -75,6 +83,13 @@ impl CommentCard {
     /// Links `@login` and `#123` in the body the way GitHub does in `repo`.
     pub fn repo(mut self, repo: RepoSlug) -> Self {
         self.repo = Some(repo);
+        self
+    }
+
+    /// Offers Quote reply in the body's context menu, which hands `handler` the text
+    /// selected when the menu opened, or the whole body when nothing is.
+    pub fn on_quote(mut self, handler: impl Fn(&str, &mut Window, &mut App) + 'static) -> Self {
+        self.on_quote = Some(Rc::new(handler));
         self
     }
 
@@ -135,14 +150,66 @@ impl RenderOnce for CommentCard {
                     ),
             )
             .child(
-                div().pl_8().text_body().child(
-                    markdown_ui::github_markdown(self.id.clone(), &self.body, self.repo.as_ref())
+                div()
+                    .id(SharedString::from(format!("{}-body", self.id)))
+                    .pl_8()
+                    .text_body()
+                    .child(
+                        markdown_ui::github_markdown(
+                            self.id.clone(),
+                            &self.body,
+                            self.repo.as_ref(),
+                        )
                         .selectable(true),
-                ),
+                    )
+                    .test_support()
+                    .context_menu(body_menu(self.body.clone(), self.on_quote.clone())),
             )
             .when(!self.actions.is_empty(), |this| {
                 this.child(h_flex().pl_6().gap_1().children(self.actions))
             })
+    }
+}
+
+/// A comment body's context menu: Copy the selection, Copy text for the whole Markdown
+/// source, and Quote reply when the owner takes quotes.
+fn body_menu(
+    body: SharedString,
+    on_quote: Option<QuoteHandler>,
+) -> impl Fn(PopupMenu, &mut Window, &mut gpui_kit::Context<PopupMenu>) -> PopupMenu + 'static {
+    move |menu, window, cx| {
+        // Read now: the press on a menu item clears the selection before its handler.
+        let selection = TextSelection::selected_text(window, cx);
+        let quoted = if selection.trim().is_empty() {
+            body.to_string()
+        } else {
+            selection.clone()
+        };
+        let source = body.clone();
+        let menu = menu
+            .item(
+                PopupMenuItem::new("Copy")
+                    .icon(Icon::new(IconName::Copy))
+                    .disabled(selection.is_empty())
+                    .on_click(move |_, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(selection.clone()))
+                    }),
+            )
+            .item(
+                PopupMenuItem::new("Copy text")
+                    .icon(Icon::new(IconName::FileText))
+                    .on_click(move |_, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(source.to_string()))
+                    }),
+            );
+        match on_quote.clone() {
+            Some(quote) => menu.separator().item(
+                PopupMenuItem::new("Quote reply")
+                    .icon(Icon::new(IconName::TextQuote))
+                    .on_click(move |_, window, cx| quote(&quoted, window, cx)),
+            ),
+            None => menu,
+        }
     }
 }
 
