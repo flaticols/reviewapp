@@ -14,8 +14,10 @@ gpui_kit::actions!(
         GoBack,
         /// Syncs pull requests now.
         Refresh,
-        /// Focuses the search field in the title bar.
+        /// Opens the command palette.
         FocusSearch,
+        /// Focuses the pull request list's filter field in the title bar.
+        FocusFilter,
         /// Shows or hides the sidebar.
         ToggleSidebar,
         /// Shows or hides a review's right sidebar: reviewers, checks and dependencies.

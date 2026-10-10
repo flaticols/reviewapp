@@ -27,6 +27,8 @@ enum Scene {
     ApprovePopover,
     /// A pull request row's context menu.
     RowMenu,
+    /// The list's Filter menu, open from the title bar.
+    FilterMenu,
     /// A file header's context menu.
     FileMenu,
     /// One commit picked in the commit menu.
@@ -66,10 +68,11 @@ enum Scene {
 }
 
 impl Scene {
-    const ALL: [Scene; 27] = [
+    const ALL: [Scene; 28] = [
         Self::List,
         Self::OneCommit,
         Self::RowMenu,
+        Self::FilterMenu,
         Self::FileMenu,
         Self::RequestReview,
         Self::Thread,
@@ -102,6 +105,7 @@ impl Scene {
             Self::Thread => "02-thread",
             Self::ApprovePopover => "03b-approve-popover",
             Self::RowMenu => "01c-row-menu",
+            Self::FilterMenu => "01d-filter-menu",
             Self::FileMenu => "02h-file-menu",
             Self::OneCommit => "02i-one-commit",
             Self::RequestReview => "03c-request-review",
@@ -301,6 +305,11 @@ fn render(
             use gpui_kit::test::TestWindowExt as _;
             window.render_frame(cx);
             window.right_click("flaticols/switchfold#482", cx);
+        }
+        Scene::FilterMenu => {
+            use gpui_kit::test::TestWindowExt as _;
+            window.render_frame(cx);
+            window.click("list-filter", cx);
         }
         Scene::FileMenu => {
             use gpui_kit::test::TestWindowExt as _;

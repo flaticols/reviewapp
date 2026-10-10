@@ -1,9 +1,9 @@
 //! Settings › Keyboard: the shortcuts Switchfold binds, read from the live keymap.
 
 use app_state_ui::actions::{
-    CheckOut, FocusSearch, GoBack, OpenInZed, OpenSelected, OpenSettings, Refresh, ResetZoom,
-    ReviewWithAgent, SelectNext, SelectPrevious, SubmitComment, SubmitReview, ToggleFocusMode,
-    ToggleInspector, ToggleSidebar, ZoomIn, ZoomOut,
+    CheckOut, FocusFilter, FocusSearch, GoBack, OpenInZed, OpenSelected, OpenSettings, Refresh,
+    ResetZoom, ReviewWithAgent, SelectNext, SelectPrevious, SubmitComment, SubmitReview,
+    ToggleFocusMode, ToggleInspector, ToggleSidebar, ZoomIn, ZoomOut,
 };
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::{Action, App, IntoElement, ParentElement as _, RenderOnce, Window, div};
@@ -52,6 +52,12 @@ impl RenderOnce for KeyboardPage {
                     window,
                 ))
                 .row(row("Refresh", &Refresh, None, window))
+                .row(row(
+                    "Filter the pull request list",
+                    &FocusFilter,
+                    Some("PullRequestList"),
+                    window,
+                ))
                 .row(row("Settings", &OpenSettings, None, window))
                 .row(row(
                     "Toggle sidebar",

@@ -362,6 +362,11 @@ impl Workspace {
         }
     }
 
+    /// The pull request list.
+    pub fn pull_request_list(&self) -> &Entity<PullRequestList> {
+        &self.pull_request_list
+    }
+
     /// Selects `key` in the list and opens its review.
     pub fn open_pull_request(
         &mut self,
@@ -446,7 +451,10 @@ impl Workspace {
         match &self.route {
             Route::PullRequests => {
                 let open = !self.pull_request_list.read(cx).is_sidebar_collapsed();
-                title_bar = title_bar.sidebar_open(open);
+                title_bar = title_bar
+                    .sidebar_open(open)
+                    .title(pr_list_ui::ListTitle::new(self.pull_request_list.clone()))
+                    .actions(pr_list_ui::ListActions::new(self.pull_request_list.clone()));
             }
             Route::SignIn(_) => {
                 return title_bar.without_sidebar_toggle().without_account();

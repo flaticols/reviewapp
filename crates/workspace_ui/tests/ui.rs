@@ -570,3 +570,37 @@ fn zed_agent_drafts_pending_comments_but_cannot_post(cx: &mut TestAppContext) {
     );
     assert!(other.is_error);
 }
+
+#[gpui_kit::test]
+fn list_filters_show_as_chips_that_clear_them(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let list = cx.update(|cx| workspace.read(cx).pull_request_list().clone());
+    list.update(cx, |list, cx| {
+        list.update_filters(|filters| filters.author = Some("tanya".into()), cx)
+    });
+    cx.run_until_parked();
+    let chip = cx
+        .update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.try_find("chip-Author").is_some()
+        })
+        .unwrap();
+    assert!(chip, "an active filter is visible above the list");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("chip-Author", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        list.read_with(cx, |list, _| list.filters().author.clone()),
+        None
+    );
+    let gone = cx
+        .update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.try_find("chip-Author").is_none()
+        })
+        .unwrap();
+    assert!(gone);
+}

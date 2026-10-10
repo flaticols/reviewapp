@@ -4,21 +4,21 @@
 mod filters;
 mod row;
 mod sidebar;
+mod toolbar;
 
 use std::ops::Range;
 
 use app_state_ui::actions::{
-    OpenSelected, OpenSettings, Refresh, SelectNext, SelectPrevious, ToggleSidebar,
+    FocusFilter, OpenSelected, OpenSettings, Refresh, SelectNext, SelectPrevious, ToggleSidebar,
 };
 use app_state_ui::{ListState, PullRequestStore, StoresExt as _};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, Selectable as _, Sizable as _,
-    button::Button,
+    ActiveTheme as _, Icon, Sizable as _,
+    button::{Button, ButtonVariants as _},
     h_flex,
-    input::{Input, InputEvent, InputState},
-    menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem},
-    separator::Separator,
+    input::{InputEvent, InputState},
+    menu::ContextMenuExt as _,
     sidebar::{Sidebar, SidebarCollapsible, SidebarItem as _, SidebarMenu, SidebarMenuItem},
     v_flex,
 };
@@ -28,12 +28,13 @@ use gpui_kit::{
     SharedString, StyleRefinement, Styled as _, Subscription, UniformListScrollHandle, Window, div,
     rems, uniform_list,
 };
-use pr_model::{CheckStatus, Inbox, PullRequest, PullRequestKey, RepoSlug, ReviewDecision};
+use pr_model::{Inbox, PullRequest, PullRequestKey, RepoSlug};
 use theme_ui::TypographyExt as _;
-use widgets_ui::{Counter, EmptyState, FilterTabs};
+use widgets_ui::{Counter, EmptyState};
 
 pub use filters::{CI_FILTERS, ListFilters, Scope, SortOrder, StateTab, tab_count, visible};
 pub use row::{PullRequestRow, SkeletonRow, review_decision_icon};
+pub use toolbar::{ListActions, ListTitle};
 
 const CONTEXT: &str = "PullRequestList";
 
@@ -45,6 +46,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("up", SelectPrevious, Some(CONTEXT)),
         KeyBinding::new("k", SelectPrevious, Some(CONTEXT)),
         KeyBinding::new("enter", OpenSelected, Some(CONTEXT)),
+        KeyBinding::new("cmd-f", FocusFilter, Some(CONTEXT)),
     ]);
 }
 
@@ -83,8 +85,8 @@ impl Focusable for PullRequestList {
 impl PullRequestList {
     /// Creates the list showing the Review requested inbox.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let filter_input = cx
-            .new(|cx| InputState::new(window, cx).placeholder("Filter by title, #number, author…"));
+        let filter_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Filter pull requests"));
         let store = cx.stores().pull_requests().clone();
         let mut subscriptions = vec![
             cx.observe(&store, |_, _, cx| cx.notify()),
@@ -111,6 +113,18 @@ impl PullRequestList {
             scroll_handle: UniformListScrollHandle::new(),
             _subscriptions: subscriptions,
         }
+    }
+
+    /// The filters in effect.
+    pub fn filters(&self) -> &ListFilters {
+        &self.filters
+    }
+
+    /// Changes the filters, as the title bar's Filter menu does.
+    pub fn update_filters(&mut self, edit: impl FnOnce(&mut ListFilters), cx: &mut Context<Self>) {
+        edit(&mut self.filters);
+        self.selected = None;
+        cx.notify();
     }
 
     /// Whether the sidebar is hidden.
@@ -308,168 +322,90 @@ impl PullRequestList {
             )
     }
 
-    fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let store = cx.stores().pull_requests().read(cx);
-        let count = tab_count(
-            store.pull_requests(),
-            &self.scope,
-            store.saved_filters(),
-            StateTab::Open,
-        );
-        h_flex()
-            .flex_shrink_0()
-            .h(rems(3.25))
-            .px_4()
-            .gap_2()
-            .child(div().text_heading().child(self.title(cx)))
-            .child(Counter::new(count))
-            .child(div().flex_1())
-            .child(
-                Input::new(&self.filter_input)
-                    .small()
-                    .w(rems(18.75))
-                    .cleanable(true)
-                    .prefix(Icon::new(IconName::Search).small()),
-            )
-            .child(
-                Button::new("refresh")
-                    .outline()
-                    .small()
-                    .icon(IconName::RefreshCw)
-                    .tooltip_with_action("Refresh", &Refresh, None)
-                    .on_click(|_, window, cx| window.dispatch_action(Box::new(Refresh), cx)),
-            )
-    }
-
-    fn render_filter_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Field filters in effect, as chips that each remove their filter. Hidden when
+    /// none are on, so the filter state stays visible without a permanent bar.
+    fn render_active_filters(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let filters = &self.filters;
+        let chips: Vec<Chip> = [
+            filters.repository.as_ref().map(|r| {
+                (
+                    "Repository",
+                    r.name().clone(),
+                    (|f: &mut ListFilters| f.repository = None) as fn(&mut ListFilters),
+                )
+            }),
+            filters.author.clone().map(|a| {
+                (
+                    "Author",
+                    a,
+                    (|f: &mut ListFilters| f.author = None) as fn(&mut ListFilters),
+                )
+            }),
+            filters.label.clone().map(|l| {
+                (
+                    "Label",
+                    l,
+                    (|f: &mut ListFilters| f.label = None) as fn(&mut ListFilters),
+                )
+            }),
+            filters.ci.map(|c| {
+                (
+                    "CI",
+                    c.label().to_string(),
+                    (|f: &mut ListFilters| f.ci = None) as fn(&mut ListFilters),
+                )
+            }),
+            filters.review.map(|r| {
+                (
+                    "Review",
+                    r.label().to_string(),
+                    (|f: &mut ListFilters| f.review = None) as fn(&mut ListFilters),
+                )
+            }),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if chips.is_empty() {
+            return None;
+        }
         let view = cx.entity();
-        let store = cx.stores().pull_requests().read(cx);
-        let prs = store.pull_requests();
-        let saved = store.saved_filters();
-        let in_scope: Vec<&PullRequest> = prs
-            .iter()
-            .filter(|pr| filters::in_scope(pr, &self.scope, saved))
-            .collect();
-
-        let selected_tab = StateTab::ALL
-            .iter()
-            .position(|tab| *tab == self.filters.tab)
-            .unwrap_or_default();
-        let tabs = StateTab::ALL
-            .iter()
-            .fold(FilterTabs::new("state-tabs"), |tabs, tab| {
-                let count = tab_count(prs, &self.scope, saved, *tab);
-                let show_count = matches!(tab, StateTab::Open | StateTab::Draft) && count > 0;
-                tabs.tab(tab.label(), show_count.then_some(count))
-            });
-
-        let mut repositories: Vec<RepoSlug> =
-            in_scope.iter().map(|pr| pr.key.repo().clone()).collect();
-        repositories.sort();
-        repositories.dedup();
-        let mut authors: Vec<String> = in_scope.iter().map(|pr| pr.author.clone()).collect();
-        authors.sort();
-        authors.dedup();
-        let mut labels: Vec<String> = in_scope.iter().flat_map(|pr| pr.labels.clone()).collect();
-        labels.sort();
-        labels.dedup();
-
-        let tab_view = view.clone();
-        h_flex()
-            .flex_shrink_0()
-            .h_11()
-            .px_4()
-            .gap_2()
-            .child(tabs.selected(selected_tab).on_select(move |ix, _, cx| {
-                let tab = StateTab::ALL[*ix];
-                tab_view.update(cx, |this, cx| {
-                    this.filters.tab = tab;
-                    this.selected = None;
-                    cx.notify();
-                })
-            }))
-            .child(Separator::vertical().h_4())
-            .child(filter_menu(
-                "filter-repository",
-                "Repository",
-                self.filters
-                    .repository
-                    .as_ref()
-                    .map(|repo| repo.name().clone()),
-                repositories
-                    .into_iter()
-                    .map(|repo| (repo.name().clone(), repo))
-                    .collect(),
-                view.clone(),
-                |filters, value| filters.repository = value,
-            ))
-            .child(filter_menu(
-                "filter-author",
-                "Author",
-                self.filters.author.clone(),
-                authors.into_iter().map(|a| (a.clone(), a)).collect(),
-                view.clone(),
-                |filters, value| filters.author = value,
-            ))
-            .child(filter_menu(
-                "filter-label",
-                "Labels",
-                self.filters.label.clone(),
-                labels.into_iter().map(|l| (l.clone(), l)).collect(),
-                view.clone(),
-                |filters, value| filters.label = value,
-            ))
-            .child(filter_menu(
-                "filter-ci",
-                "CI",
-                self.filters.ci.map(|ci| ci.label().to_string()),
-                CI_FILTERS
-                    .iter()
-                    .map(|ci| (ci.label().to_string(), *ci))
-                    .collect::<Vec<(String, CheckStatus)>>(),
-                view.clone(),
-                |filters, value| filters.ci = value,
-            ))
-            .child(filter_menu(
-                "filter-review",
-                "Review",
-                self.filters.review.map(|r| r.label().to_string()),
-                ReviewDecision::ALL
-                    .iter()
-                    .map(|r| (r.label().to_string(), *r))
-                    .collect::<Vec<(String, ReviewDecision)>>(),
-                view.clone(),
-                |filters, value| filters.review = value,
-            ))
-            .child(div().flex_1())
-            .child({
-                let current = self.filters.sort;
-                let view = view.clone();
-                Button::new("sort")
-                    .outline()
-                    .small()
-                    .dropdown_caret(true)
-                    .label(current.label())
-                    .dropdown_menu_with_anchor(
-                        gpui_kit::Anchor::TopRight,
-                        move |menu: PopupMenu, _, _| {
-                            SortOrder::ALL.iter().fold(menu, |menu, order| {
-                                let view = view.clone();
-                                let order = *order;
-                                menu.item(
-                                    PopupMenuItem::new(order.label())
-                                        .checked(order == current)
-                                        .on_click(move |_, _, cx| {
-                                            view.update(cx, |this, cx| {
-                                                this.filters.sort = order;
-                                                cx.notify();
-                                            })
-                                        }),
-                                )
+        let clear_view = view.clone();
+        Some(
+            h_flex()
+                .flex_shrink_0()
+                .flex_wrap()
+                .px_4()
+                .pt_2()
+                .gap_1()
+                .children(chips.into_iter().map(move |(name, value, clear)| {
+                    let view = view.clone();
+                    Button::new(SharedString::from(format!("chip-{name}")))
+                        .outline()
+                        .xsmall()
+                        .label(format!("{name}: {value}"))
+                        .icon(IconName::X)
+                        .tooltip(format!("Stop filtering by {}", name.to_lowercase()))
+                        .on_click(move |_, _, cx| {
+                            view.update(cx, |this, cx| {
+                                clear(&mut this.filters);
+                                cx.notify();
                             })
-                        },
-                    )
-            })
+                        })
+                }))
+                .child(
+                    Button::new("chips-clear")
+                        .ghost()
+                        .xsmall()
+                        .label("Clear")
+                        .on_click(move |_, _, cx| {
+                            clear_view.update(cx, |this, cx| {
+                                this.filters.clear_fields();
+                                cx.notify();
+                            })
+                        }),
+                ),
+        )
     }
 
     fn render_rows(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -678,69 +614,12 @@ fn sidebar_repositories(
     counted
 }
 
+/// An active filter as a chip: its name, its value, and how to clear it.
+type Chip = (&'static str, String, fn(&mut ListFilters));
+
 /// Sidebar labels at the design's 13 px chrome size; the component defaults to 14 px.
 fn label_style() -> StyleRefinement {
     StyleRefinement::default().text_ui()
-}
-
-/// A filter dropdown: the trigger names the filter, or its value when set, and stays
-/// selected while a value is applied.
-fn filter_menu<T: Clone + PartialEq + 'static>(
-    id: &'static str,
-    name: &'static str,
-    current: Option<impl Into<SharedString>>,
-    options: Vec<(impl Into<SharedString>, T)>,
-    view: Entity<PullRequestList>,
-    apply: fn(&mut ListFilters, Option<T>),
-) -> impl IntoElement {
-    let current: Option<SharedString> = current.map(Into::into);
-    let options: Vec<(SharedString, T)> = options
-        .into_iter()
-        .map(|(label, value)| (label.into(), value))
-        .collect();
-    let label: SharedString = match &current {
-        Some(value) => format!("{name}: {value}").into(),
-        None => name.into(),
-    };
-    Button::new(id)
-        .outline()
-        .small()
-        .dropdown_caret(true)
-        .selected(current.is_some())
-        .label(label)
-        .dropdown_menu(move |menu: PopupMenu, _, _| {
-            let any_view = view.clone();
-            let menu = menu.item(
-                PopupMenuItem::new(format!("Any {}", name.to_lowercase()))
-                    .checked(current.is_none())
-                    .on_click(move |_, _, cx| {
-                        any_view.update(cx, |this, cx| {
-                            apply(&mut this.filters, None);
-                            cx.notify();
-                        })
-                    }),
-            );
-            let menu = if options.is_empty() {
-                menu
-            } else {
-                menu.separator()
-            };
-            options.iter().fold(menu, |menu, (label, value)| {
-                let view = view.clone();
-                let value = value.clone();
-                menu.item(
-                    PopupMenuItem::new(label.clone())
-                        .checked(current.as_ref() == Some(label))
-                        .on_click(move |_, _, cx| {
-                            let value = value.clone();
-                            view.update(cx, |this, cx| {
-                                apply(&mut this.filters, Some(value));
-                                cx.notify();
-                            })
-                        }),
-                )
-            })
-        })
 }
 
 impl Render for PullRequestList {
@@ -748,7 +627,12 @@ impl Render for PullRequestList {
         h_flex()
             .size_full()
             .items_stretch()
+            .key_context(CONTEXT)
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
+            .on_action(cx.listener(|this, _: &FocusFilter, window, cx| {
+                this.filter_input
+                    .update(cx, |input, cx| input.focus(window, cx))
+            }))
             .on_action(cx.listener(|_, _: &Refresh, _, cx| {
                 cx.stores()
                     .pull_requests()
@@ -761,8 +645,7 @@ impl Render for PullRequestList {
                     .flex_1()
                     .min_w_0()
                     .bg(cx.theme().background)
-                    .child(self.render_header(cx))
-                    .child(self.render_filter_bar(cx))
+                    .children(self.render_active_filters(cx))
                     .child(
                         div()
                             .id("pull-request-rows")
@@ -770,6 +653,7 @@ impl Render for PullRequestList {
                             .track_focus(&self.focus_handle)
                             .flex_1()
                             .min_h_0()
+                            .pt_1()
                             .pb_2()
                             .on_action(
                                 cx.listener(|this, _: &SelectNext, _, cx| {

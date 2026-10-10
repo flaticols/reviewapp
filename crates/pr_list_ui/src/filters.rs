@@ -103,6 +103,16 @@ impl ListFilters {
             || !self.text.trim().is_empty()
     }
 
+    /// Clears the field filters (repository, author, label, CI and review), keeping
+    /// the state, text and sort.
+    pub fn clear_fields(&mut self) {
+        self.repository = None;
+        self.author = None;
+        self.label = None;
+        self.ci = None;
+        self.review = None;
+    }
+
     /// Clears every filter, keeping the tab and sort.
     pub fn clear(&mut self) {
         *self = Self {
