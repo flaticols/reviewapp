@@ -18,7 +18,7 @@ use gpui_kit::{
 };
 use pr_model::{CheckStatus, PullRequest, RepoSlug, ReviewDecision};
 use theme_ui::{ActiveAppTheme as _, TypographyExt as _};
-use widgets_ui::Counter;
+use widgets_ui::{Counter, EditMenu};
 
 use crate::{CI_FILTERS, ListFilters, PullRequestList, SortOrder, StateTab, filters, tab_count};
 
@@ -322,12 +322,15 @@ impl RenderOnce for ListActions {
         h_flex()
             .gap_1()
             .child(
-                div().w(rems(13.)).child(
+                EditMenu::new(
+                    "filter-edit-menu",
+                    &filter_input,
                     Input::new(&filter_input)
                         .small()
                         .cleanable(true)
                         .prefix(Icon::new(IconName::Search).small()),
-                ),
+                )
+                .w(rems(13.)),
             )
             .child(filter)
             .child(sort)

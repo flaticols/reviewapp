@@ -20,7 +20,7 @@ use gpui_kit::{
     ParentElement as _, Render, SharedString, Styled as _, Subscription, Window, div, rems,
 };
 use settings_model::{AgentConfig, OpenFilesAt, Preferences, display_path};
-use widgets_ui::{SettingsPage, SettingsRow, SettingsSection, StatusTag, Tone};
+use widgets_ui::{EditMenu, SettingsPage, SettingsRow, SettingsSection, StatusTag, Tone};
 
 /// The Agents & editor page.
 pub struct AgentsPage {
@@ -36,8 +36,11 @@ impl AgentsPage {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let settings = cx.stores().settings().clone();
         let preferences = settings.read(cx).preferences().clone();
-        let zed_command =
-            cx.new(|cx| InputState::new(window, cx).default_value(preferences.zed_command.clone()));
+        let zed_command = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(preferences.zed_command.clone())
+                .context_menu(false)
+        });
         let options: Vec<SharedString> =
             OpenFilesAt::ALL.iter().map(|o| o.label().into()).collect();
         let selected = OpenFilesAt::ALL
@@ -206,9 +209,15 @@ fn preference_row(
 
 /// Opens the dialog that adds an agent, or edits `existing` (id, command line).
 fn open_agent_dialog(existing: Option<(String, String)>, window: &mut Window, cx: &mut App) {
-    let name = cx.new(|cx| InputState::new(window, cx).placeholder("My agent"));
+    let name = cx.new(|cx| {
+        InputState::new(window, cx)
+            .placeholder("My agent")
+            .context_menu(false)
+    });
     let command = cx.new(|cx| {
-        let state = InputState::new(window, cx).placeholder("npx -y my-acp-agent");
+        let state = InputState::new(window, cx)
+            .placeholder("npx -y my-acp-agent")
+            .context_menu(false);
         match &existing {
             Some((_, line)) => state.default_value(line.clone()),
             None => state,
@@ -224,7 +233,7 @@ fn open_agent_dialog(existing: Option<(String, String)>, window: &mut Window, cx
                 v_flex()
                     .gap_1p5()
                     .child(Label::new("Name").font_weight(FontWeight::MEDIUM))
-                    .child(Input::new(&name)),
+                    .child(EditMenu::new("name-edit-menu", &name, Input::new(&name))),
             );
         }
         body =
@@ -232,7 +241,11 @@ fn open_agent_dialog(existing: Option<(String, String)>, window: &mut Window, cx
                 v_flex()
                     .gap_1p5()
                     .child(Label::new("Command").font_weight(FontWeight::MEDIUM))
-                    .child(Input::new(&command).prefix(Icon::new(IconName::Terminal).small()))
+                    .child(EditMenu::new(
+                        "command-edit-menu",
+                        &command,
+                        Input::new(&command).prefix(Icon::new(IconName::Terminal).small()),
+                    ))
                     .child(div().text_sm().child(
                         "A program that speaks the Agent Client Protocol on stdin and stdout.",
                     )),
@@ -417,11 +430,14 @@ impl Render for AgentsPage {
             SettingsSection::titled("Editor")
                 .row(
                     SettingsRow::new("Zed command").description(zed_note).trailing(
-                        div().w(rems(15.)).child(
+                        EditMenu::new(
+                            "zed-command-edit-menu",
+                            &self.zed_command,
                             Input::new(&self.zed_command)
                                 .small()
                                 .prefix(Icon::new(IconName::Terminal).small()),
-                        ),
+                        )
+                        .w(rems(15.)),
                     ),
                 )
                 .row(

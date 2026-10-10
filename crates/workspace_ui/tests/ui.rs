@@ -428,6 +428,62 @@ fn quote_reply_on_the_description_quotes_it_in_the_composer(cx: &mut TestAppCont
 }
 
 #[gpui_kit::test]
+fn the_composer_cuts_and_pastes_through_the_app_menu(cx: &mut TestAppContext) {
+    use gpui_kit::component::WindowExt as _;
+    let (window, _) = open_featured(cx);
+    let open_menu = |cx: &mut TestAppContext| {
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.right_click("composer-edit-menu", cx);
+        })
+        .unwrap();
+    };
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("description-reply", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| window.input("Hello there", cx))
+        .unwrap();
+    // Cut, Copy, Paste, separator, Select all.
+    open_menu(cx);
+    pick_menu_item(window, 4, cx);
+    open_menu(cx);
+    pick_menu_item(window, 0, cx);
+    let cut = cx.read_from_clipboard().and_then(|item| item.text());
+    assert_eq!(
+        cut.as_deref(),
+        Some("Hello there"),
+        "Cut takes the selected text"
+    );
+
+    open_menu(cx);
+    pick_menu_item(window, 2, cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.has_focused_input(cx), "the composer keeps focus");
+        window.press("cmd-enter", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let posted = cx.update(|cx| {
+        use app_state_ui::StoresExt as _;
+        cx.stores()
+            .pull_requests()
+            .read(cx)
+            .loaded_detail(&featured())
+            .and_then(|detail| {
+                detail.timeline.iter().rev().find_map(|item| match item {
+                    TimelineItem::Commented { comment } => Some(comment.body.clone()),
+                    _ => None,
+                })
+            })
+    });
+    assert_eq!(posted.as_deref(), Some("Hello there"), "Paste put it back");
+}
+
+#[gpui_kit::test]
 fn approve_asks_in_a_popover_listing_approvals(cx: &mut TestAppContext) {
     let (window, _) = open_featured(cx);
     cx.update_window(window, |_, window, cx| {

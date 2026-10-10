@@ -86,8 +86,11 @@ impl Focusable for PullRequestList {
 impl PullRequestList {
     /// Creates the list showing the Review requested inbox.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let filter_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Filter pull requests"));
+        let filter_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Filter pull requests")
+                .context_menu(false)
+        });
         let store = cx.stores().pull_requests().clone();
         let mut subscriptions = vec![
             cx.observe(&store, |_, _, cx| cx.notify()),

@@ -24,7 +24,7 @@ use review_model::{
     AgentFinding, FindingState, PullRequestDetail, ReviewThread, ReviewVerdict, TimelineItem,
 };
 use theme_ui::{ActiveAppTheme as _, TypographyExt as _};
-use widgets_ui::{AvatarSize, FilterTabs, InitialsAvatar, StatusTag, Tone};
+use widgets_ui::{AvatarSize, EditMenu, FilterTabs, InitialsAvatar, StatusTag, Tone};
 
 use crate::cards::{CheckRow, CommentCard, CommitRow, EventRow, actor_avatar};
 use crate::rows::TimelineRow;
@@ -589,12 +589,11 @@ impl ReviewThreadView {
             .border_color(cx.theme().border)
             .rounded(cx.theme().radius_lg)
             .bg(cx.theme().background)
-            .child(
-                div()
-                    .px_1()
-                    .pt_1()
-                    .child(Textarea::new(input).appearance(false)),
-            )
+            .child(div().px_1().pt_1().child(EditMenu::new(
+                SharedString::from(format!("{id}-edit-menu")),
+                input,
+                Textarea::new(input).appearance(false),
+            )))
             .child(
                 h_flex()
                     .px_3()
@@ -880,12 +879,11 @@ impl ReviewThreadView {
             .border_1()
             .border_color(cx.theme().border)
             .rounded(cx.theme().radius_lg)
-            .child(
-                div()
-                    .px_1()
-                    .pt_1()
-                    .child(Textarea::new(&self.composer).appearance(false).h_16()),
-            )
+            .child(div().px_1().pt_1().child(EditMenu::new(
+                "composer-edit-menu",
+                &self.composer,
+                Textarea::new(&self.composer).appearance(false).h_16(),
+            )))
             .child(
                 h_flex()
                     .px_3()

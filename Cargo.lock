@@ -2627,6 +2627,7 @@ dependencies = [
  "keychain",
  "settings_model",
  "theme_ui",
+ "widgets_ui",
 ]
 
 [[package]]

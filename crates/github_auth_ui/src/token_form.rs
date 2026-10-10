@@ -17,6 +17,7 @@ use gpui_kit::{
 };
 use settings_model::{Account, AccountSource};
 use theme_ui::TypographyExt as _;
+use widgets_ui::EditMenu;
 
 /// What the form reports to its owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,11 +42,16 @@ impl EventEmitter<TokenFormEvent> for TokenForm {}
 impl TokenForm {
     /// An empty form for github.com.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let host = cx.new(|cx| InputState::new(window, cx).default_value("github.com"));
+        let host = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value("github.com")
+                .context_menu(false)
+        });
         let token = cx.new(|cx| {
             InputState::new(window, cx)
                 .masked(true)
                 .placeholder("ghp_…")
+                .context_menu(false)
         });
         let subscription = cx.subscribe(&token, |this: &mut Self, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
@@ -191,17 +197,23 @@ impl Render for TokenForm {
                 v_flex()
                     .gap_1p5()
                     .child(Label::new("Host").text_ui().font_weight(FontWeight::MEDIUM))
-                    .child(Input::new(&self.host).prefix(Icon::new(IconName::Github).small())),
+                    .child(EditMenu::new(
+                        "host-edit-menu",
+                        &self.host,
+                        Input::new(&self.host).prefix(Icon::new(IconName::Github).small()),
+                    )),
             )
             .child(
                 v_flex()
                     .gap_1p5()
                     .child(Label::new("Token").text_ui().font_weight(FontWeight::MEDIUM))
-                    .child(
+                    .child(EditMenu::new(
+                        "token-edit-menu",
+                        &self.token,
                         Input::new(&self.token)
                             .mask_toggle()
                             .prefix(Icon::new(IconName::KeyRound).small()),
-                    )
+                    ))
                     .when_some(status.or(checking), |this, (icon, color, text)| {
                         this.child(
                             h_flex()

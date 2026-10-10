@@ -220,6 +220,7 @@ impl ReviewThreadView {
             TextareaState::new(window, cx)
                 .placeholder("Leave a comment… use @ to mention people or agents")
                 .rows(2)
+                .context_menu(false)
         });
         let file_tree = cx.new(|cx| TreeState::new(cx));
         let mut subscriptions = vec![
@@ -813,7 +814,8 @@ fn editor(
     cx.new(|cx| {
         let state = TextareaState::new(window, cx)
             .placeholder(placeholder)
-            .auto_grow(2, 12);
+            .auto_grow(2, 12)
+            .context_menu(false);
         match value {
             Some(value) => state.default_value(value.to_string()),
             None => state,

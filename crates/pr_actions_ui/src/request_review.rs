@@ -18,7 +18,7 @@ use gpui_kit::{
 use pr_model::PullRequestKey;
 use review_model::Actor;
 use theme_ui::TypographyExt as _;
-use widgets_ui::{ActorName, InitialsAvatar};
+use widgets_ui::{ActorName, EditMenu, InitialsAvatar};
 
 /// The Request review dialog's state: everyone who can review, filtered by a search,
 /// minus the author and people already asked.
@@ -32,7 +32,11 @@ struct RequestReviewForm {
 
 impl RequestReviewForm {
     fn new(key: PullRequestKey, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let query = cx.new(|cx| InputState::new(window, cx).placeholder("Search people"));
+        let query = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Search people")
+                .context_menu(false)
+        });
         cx.subscribe(&query, |_, _, _: &InputEvent, cx| cx.notify())
             .detach();
         let store = cx.stores().pull_requests().clone();
@@ -176,7 +180,14 @@ impl Render for RequestReviewForm {
                 }
             }
         };
-        v_flex().gap_3().child(Input::new(&self.query)).child(body)
+        v_flex()
+            .gap_3()
+            .child(EditMenu::new(
+                "query-edit-menu",
+                &self.query,
+                Input::new(&self.query),
+            ))
+            .child(body)
     }
 }
 

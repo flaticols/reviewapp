@@ -25,6 +25,7 @@ use theme_ui::TypographyExt as _;
 
 use crate::ReviewThreadView;
 use crate::review_actions::bordered;
+use widgets_ui::EditMenu;
 
 /// The merge panel's state: the chosen method, the commit title and message, and
 /// whether a request is in flight.
@@ -107,11 +108,16 @@ fn suggested_commit(detail: &PullRequestDetail, method: MergeMethod) -> (String,
 
 impl MergeForm {
     pub(crate) fn new(key: PullRequestKey, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let title = cx.new(|cx| InputState::new(window, cx).placeholder("Commit title"));
+        let title = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Commit title")
+                .context_menu(false)
+        });
         let message = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .placeholder("Commit message")
                 .auto_grow(3, 8)
+                .context_menu(false)
         });
         let mut form = Self {
             key,
@@ -277,6 +283,7 @@ fn open_squash_dialog(detail: &PullRequestDetail, window: &mut Window, cx: &mut 
     let message = cx.new(|cx| {
         TextareaState::new(window, cx)
             .auto_grow(4, 10)
+            .context_menu(false)
             .default_value(format!("{}\n\n{}", suggested.0, suggested.1))
     });
     let title = format!("Squash {count} commits on {head_ref} into one?");
@@ -293,7 +300,14 @@ fn open_squash_dialog(detail: &PullRequestDetail, window: &mut Window, cx: &mut 
         alert
             .title(title.clone())
             .description(description.clone())
-            .child(div().pt_2().child(Textarea::new(&message).small()))
+            .child(
+                EditMenu::new(
+                    "squash-message-edit-menu",
+                    &message,
+                    Textarea::new(&message).small(),
+                )
+                .pt_2(),
+            )
             .confirm()
             .button_props(
                 DialogButtonProps::default()
@@ -444,8 +458,16 @@ impl Render for MergeForm {
                 this.child(
                     v_flex()
                         .gap_1()
-                        .child(Input::new(&self.title).small())
-                        .child(Textarea::new(&self.message).small()),
+                        .child(EditMenu::new(
+                            "merge-title-edit-menu",
+                            &self.title,
+                            Input::new(&self.title).small(),
+                        ))
+                        .child(EditMenu::new(
+                            "merge-message-edit-menu",
+                            &self.message,
+                            Textarea::new(&self.message).small(),
+                        )),
                 )
             })
             .when(info.deletes_branch, |this| {

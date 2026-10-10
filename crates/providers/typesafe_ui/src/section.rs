@@ -15,7 +15,7 @@ use gpui_kit::{
 };
 use theme_ui::TypographyExt as _;
 use typesafe::{Client, DEFAULT_MODEL};
-use widgets_ui::{SettingsRow, SettingsSection, StatusTag, Tone};
+use widgets_ui::{EditMenu, SettingsRow, SettingsSection, StatusTag, Tone};
 
 use crate::{KEYS_URL, PROVIDER_ID};
 
@@ -45,6 +45,7 @@ impl TypeSafeSection {
             InputState::new(window, cx)
                 .masked(true)
                 .placeholder("Paste a TypeSafe.ai API key")
+                .context_menu(false)
         });
         let current = cx
             .stores()
@@ -200,9 +201,12 @@ impl Render for TypeSafeSection {
                         h_flex()
                             .gap_1()
                             .child(
-                                div()
-                                    .w(rems(15.))
-                                    .child(Input::new(&self.key).small().mask_toggle()),
+                                EditMenu::new(
+                                    "typesafe-key-edit-menu",
+                                    &self.key,
+                                    Input::new(&self.key).small().mask_toggle(),
+                                )
+                                .w(rems(15.)),
                             )
                             .child(
                                 Button::new("typesafe-save-key")

@@ -31,6 +31,7 @@ use settings_model::{AgentConfig, display_path};
 use theme_ui::{ActiveAppTheme as _, TypographyExt as _};
 
 use crate::{AgentRun, RunSetup};
+use widgets_ui::EditMenu;
 
 /// The Review with an agent form at the top of the Reviews tab: agent, model and
 /// effort, scope, depth and instructions, and Start review.
@@ -103,6 +104,7 @@ impl StartReviewForm {
             TextareaState::new(window, cx)
                 .placeholder("What should the agent focus on? (optional)")
                 .rows(2)
+                .context_menu(false)
         });
         let mut form = Self {
             key,
@@ -778,7 +780,11 @@ impl Render for StartReviewForm {
                 v_flex()
                     .gap_1p5()
                     .child(label("Instructions"))
-                    .child(Textarea::new(&self.instructions).h_16()),
+                    .child(EditMenu::new(
+                        "instructions-edit-menu",
+                        &self.instructions,
+                        Textarea::new(&self.instructions).h_16(),
+                    )),
             )
             .child(
                 h_flex()

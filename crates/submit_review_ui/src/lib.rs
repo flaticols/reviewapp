@@ -21,6 +21,7 @@ use gpui_kit::{
 use pr_model::PullRequestKey;
 use review_model::{FindingState, ReviewVerdict};
 use theme_ui::TypographyExt as _;
+use widgets_ui::EditMenu;
 
 /// The dialog's retained state: the chosen verdict, the summary and submission progress.
 pub struct SubmitReviewForm {
@@ -43,6 +44,7 @@ impl SubmitReviewForm {
             TextareaState::new(window, cx)
                 .placeholder("Summarize your review (optional)")
                 .rows(3)
+                .context_menu(false)
         });
         Self {
             key,
@@ -181,11 +183,13 @@ impl Render for SubmitReviewForm {
                             .text_ui()
                             .font_weight(FontWeight::MEDIUM),
                     )
-                    .child(
+                    .child(EditMenu::new(
+                        "summary-edit-menu",
+                        &self.summary,
                         Textarea::new(&self.summary)
                             .disabled(self.is_submitting)
                             .h_20(),
-                    ),
+                    )),
             )
             .when_some(note, |this, note| {
                 this.child(

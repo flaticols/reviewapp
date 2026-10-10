@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+widgets_ui.workspace = true
 gpui-kit.workspace = true
 app_state_ui.workspace = true
 github_api.workspace = true
