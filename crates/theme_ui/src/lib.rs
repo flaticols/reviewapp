@@ -15,7 +15,7 @@ use gpui_kit::{App, Global, Pixels, Point, SharedString, Window, WindowAppearanc
 use settings_model::{Appearance, Preferences};
 
 pub use settings_model::{DarkTheme, LightTheme};
-pub use tokens::AppTheme;
+pub use tokens::{AppTheme, TAG_NAMES};
 pub use typography::{TypographyExt, code_line_height};
 
 /// The title bar's height, the compact height of macOS unified toolbars; overlays that

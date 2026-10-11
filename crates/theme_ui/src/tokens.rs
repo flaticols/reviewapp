@@ -49,38 +49,47 @@ pub struct AppTheme {
     pub badge: Hsla,
     /// Participant colors for avatars, cursors and selections, assigned in order.
     pub presence: [Hsla; 8],
+    /// Colors a person marks items with, Finder-tag style: macOS 27's twelve named system
+    /// colors, in [`TAG_NAMES`] order.
+    pub tags: [Hsla; 12],
 }
+
+/// The names of [`AppTheme::tags`], in order.
+pub const TAG_NAMES: [&str; 12] = [
+    "Red", "Orange", "Yellow", "Green", "Mint", "Teal", "Cyan", "Blue", "Indigo", "Purple", "Pink", "Brown",
+];
 
 impl AppTheme {
     /// Tokens for dark mode in `theme`.
     pub fn dark(theme: DarkTheme) -> Self {
         match theme {
             DarkTheme::Switchfold => Self {
-                merged: hex(0xa792ffff),
-                accent: hex(0x4b8cf5ff),
-                diff_add: hex(0x16281cff),
-                diff_add_strong: hex(0x1d3826ff),
-                diff_del: hex(0x2d1a1cff),
-                diff_del_strong: hex(0x422225ff),
-                diff_hunk: hex(0x1b2336ff),
-                syntax_keyword: hex(0xc678ddff),
-                syntax_string: hex(0x98c379ff),
-                syntax_function: hex(0x61afefff),
-                syntax_type: hex(0xe5c07bff),
-                syntax_comment: hex(0x6f6f7aff),
-                syntax_number: hex(0xd19a66ff),
-                overlay: hex(0x00000066),
-                shadow: hex(0x00000066),
-                approve: hex(0x4cc47aff),
-                approve_hover: hex(0x62d08bff),
-                approve_active: hex(0x3aa865ff),
-                agent: hex(0xa792ffff),
-                agent_subtle: hex(0x29233fff),
-                success_subtle: hex(0x172e21ff),
-                danger_subtle: hex(0x341c1eff),
-                warning_subtle: hex(0x35281aff),
-                badge: hex(0xe5484dff),
+                merged: hex(0xa99bffff),
+                accent: hex(0x419cffff),
+                diff_add: hex(0x182a1fff),
+                diff_add_strong: hex(0x1f3d29ff),
+                diff_del: hex(0x301c1dff),
+                diff_del_strong: hex(0x4a2427ff),
+                diff_hunk: hex(0x1a2638ff),
+                syntax_keyword: hex(0xff7ab2ff),
+                syntax_string: hex(0xff8f70ff),
+                syntax_function: hex(0x7ab6ffff),
+                syntax_type: hex(0x6fd9c9ff),
+                syntax_comment: hex(0x858791ff),
+                syntax_number: hex(0xd9c97cff),
+                overlay: hex(0x00000080),
+                shadow: hex(0x00000080),
+                approve: hex(0x23864aff),
+                approve_hover: hex(0x2a9655ff),
+                approve_active: hex(0x1e7440ff),
+                agent: hex(0xa99bffff),
+                agent_subtle: hex(0x2b2643ff),
+                success_subtle: hex(0x19301fff),
+                danger_subtle: hex(0x3a1f20ff),
+                warning_subtle: hex(0x3a2a17ff),
+                badge: hex(0xff4245ff),
                 presence: presence_dark(),
+                tags: tags_dark(),
             },
             DarkTheme::IslandsDark => Self {
                 merged: hex(0xc092faff),
@@ -108,6 +117,7 @@ impl AppTheme {
                 warning_subtle: hex(0xe0ce7026),
                 badge: hex(0xe5484dff),
                 presence: presence_dark(),
+                tags: tags_dark(),
             },
             DarkTheme::OneDark => Self {
                 merged: hex(0xc678ddff),
@@ -135,6 +145,7 @@ impl AppTheme {
                 warning_subtle: hex(0xe5c07b26),
                 badge: hex(0xe5484dff),
                 presence: presence_dark(),
+                tags: tags_dark(),
             },
             DarkTheme::Espresso => Self {
                 merged: hex(0xd197d9ff),
@@ -162,6 +173,7 @@ impl AppTheme {
                 warning_subtle: hex(0xffc66d26),
                 badge: hex(0xe5484dff),
                 presence: presence_dark(),
+                tags: tags_dark(),
             },
             DarkTheme::GitHub => Self {
                 merged: hex(0xc084fcff),
@@ -189,6 +201,7 @@ impl AppTheme {
                 warning_subtle: hex(0xd2992226),
                 badge: hex(0xe5484dff),
                 presence: presence_dark(),
+                tags: tags_dark(),
             },
         }
     }
@@ -197,31 +210,32 @@ impl AppTheme {
     pub fn light(theme: LightTheme) -> Self {
         match theme {
             LightTheme::Switchfold => Self {
-                merged: hex(0x7457e8ff),
-                accent: hex(0x2f6febff),
-                diff_add: hex(0xeaf7eeff),
-                diff_add_strong: hex(0xd2efdbff),
-                diff_del: hex(0xfcededff),
-                diff_del_strong: hex(0xf7d8d8ff),
-                diff_hunk: hex(0xeef3feff),
-                syntax_keyword: hex(0xa626a4ff),
-                syntax_string: hex(0x4e9a3eff),
-                syntax_function: hex(0x3f6fd8ff),
-                syntax_type: hex(0xb7791fff),
-                syntax_comment: hex(0xa2a2acff),
-                syntax_number: hex(0x986801ff),
-                overlay: hex(0x0000001f),
-                shadow: hex(0x0000001f),
-                approve: hex(0x1e9a4bff),
-                approve_hover: hex(0x1b8a43ff),
-                approve_active: hex(0x187a3bff),
-                agent: hex(0x7457e8ff),
-                agent_subtle: hex(0xefebfeff),
-                success_subtle: hex(0xe6f5ebff),
-                danger_subtle: hex(0xfbebebff),
-                warning_subtle: hex(0xfcefe2ff),
-                badge: hex(0xe5484dff),
+                merged: hex(0x6a4fd6ff),
+                accent: hex(0x0068daff),
+                diff_add: hex(0xeaf6eeff),
+                diff_add_strong: hex(0xccebd6ff),
+                diff_del: hex(0xfdedeeff),
+                diff_del_strong: hex(0xf7d3d5ff),
+                diff_hunk: hex(0xebf3ffff),
+                syntax_keyword: hex(0x9b2393ff),
+                syntax_string: hex(0xb4441eff),
+                syntax_function: hex(0x2f5fc7ff),
+                syntax_type: hex(0x0d6e86ff),
+                syntax_comment: hex(0x75757eff),
+                syntax_number: hex(0x8a5a00ff),
+                overlay: hex(0x00000029),
+                shadow: hex(0x00000024),
+                approve: hex(0x1a7f39ff),
+                approve_hover: hex(0x176f32ff),
+                approve_active: hex(0x13602bff),
+                agent: hex(0x6a4fd6ff),
+                agent_subtle: hex(0xf0edfcff),
+                success_subtle: hex(0xe7f4eaff),
+                danger_subtle: hex(0xfcebecff),
+                warning_subtle: hex(0xfcf0e1ff),
+                badge: hex(0xff383cff),
                 presence: presence_light(),
+                tags: tags_light(),
             },
             LightTheme::GitHub => Self {
                 merged: hex(0x9333eaff),
@@ -249,6 +263,7 @@ impl AppTheme {
                 warning_subtle: hex(0x9a67001f),
                 badge: hex(0xe5484dff),
                 presence: presence_light(),
+                tags: tags_light(),
             },
             LightTheme::IslandsLight => Self {
                 merged: hex(0x871094ff),
@@ -276,6 +291,7 @@ impl AppTheme {
                 warning_subtle: hex(0xc27d041f),
                 badge: hex(0xe5484dff),
                 presence: presence_light(),
+                tags: tags_light(),
             },
             LightTheme::OneLight => Self {
                 merged: hex(0xa626a4ff),
@@ -303,6 +319,7 @@ impl AppTheme {
                 warning_subtle: hex(0xc184011f),
                 badge: hex(0xe5484dff),
                 presence: presence_light(),
+                tags: tags_light(),
             },
             LightTheme::SolarizedLight => Self {
                 merged: hex(0x6c71c4ff),
@@ -330,6 +347,7 @@ impl AppTheme {
                 warning_subtle: hex(0xb589001f),
                 badge: hex(0xe5484dff),
                 presence: presence_light(),
+                tags: tags_light(),
             },
         }
     }
@@ -408,7 +426,7 @@ pub(crate) fn apply_chrome(colors: &mut ThemeColor, palette: Palette) {
     colors.table_hover = c.subtle;
     colors.progress_bar = c.primary;
     // The off track; the on track takes the primary color on its own.
-    colors.switch = c.pressed;
+    colors.switch = c.switch.unwrap_or(c.pressed);
     colors.slider_bar = c.primary;
     colors.slider_thumb = c.on_primary;
     colors.skeleton = c.hover;
@@ -442,38 +460,45 @@ struct Chrome {
     status: Option<[Hsla; 4]>,
     /// The focus ring, when it isn't the primary color.
     ring: Option<Hsla>,
+    /// A switch's off track, when it isn't the pressed fill. The thumb is always the
+    /// background, so a dark palette needs a lighter track for the thumb to show.
+    switch: Option<Hsla>,
 }
 
 impl Chrome {
     fn light(theme: LightTheme) -> Self {
         match theme {
-            // A neutral primary, as in the product design: near-black actions on white,
-            // with blue kept for links, focus and selection.
+            // Built on macOS 27's own values: white content, the under-page grey for the
+            // sidebar and bars, and separators at the system's 10% black. The primary stays
+            // neutral, as in the product design; system blue is kept for links, focus and
+            // selection. Text runs darker than AppKit's 85% label, and muted text darker
+            // than its 50% secondary label, to keep both above 4.5:1 on the sidebar.
             LightTheme::Switchfold => Self {
                 background: hex(0xffffffff),
-                foreground: hex(0x1a1a1eff),
-                muted_foreground: hex(0x72727eff),
-                chrome: hex(0xf8f8f9ff),
-                subtle: hex(0xf5f5f6ff),
+                foreground: hex(0x1d1d1fff),
+                muted_foreground: hex(0x6b6b72ff),
+                chrome: hex(0xf7f7f8ff),
+                subtle: hex(0xf2f2f4ff),
                 raised: hex(0xffffffff),
-                hover: hex(0xededf0ff),
-                pressed: hex(0xe4e4e9ff),
-                border: hex(0xe2e2e6ff),
-                primary: hex(0x1a1a1eff),
-                primary_hover: hex(0x35353cff),
+                hover: hex(0xebebeeff),
+                pressed: hex(0xe2e2e6ff),
+                border: hex(0xe5e5e8ff),
+                primary: hex(0x1d1d1fff),
+                primary_hover: hex(0x3a3a3fff),
                 primary_active: hex(0x000000ff),
                 on_primary: hex(0xffffffff),
-                link: hex(0x2f6febff),
-                selection: hex(0x2f6feb33),
-                selected: hex(0xe4e4e9ff),
-                scrollbar: hex(0x72727e66),
+                link: hex(0x0068daff),
+                selection: hex(0x0088ff33),
+                selected: hex(0xe1e1e6ff),
+                scrollbar: hex(0x6b6b7266),
                 status: Some([
-                    hex(0x1e9a4bff),
-                    hex(0xd63b3bff),
-                    hex(0xcf6a0cff),
-                    hex(0x2f6febff),
+                    hex(0x1a7f39ff),
+                    hex(0xd92b2fff),
+                    hex(0xb85b00ff),
+                    hex(0x0068daff),
                 ]),
-                ring: Some(hex(0x2f6febff)),
+                ring: Some(hex(0x0088ffff)),
+                switch: Some(hex(0xd4d4d9ff)),
             },
             LightTheme::GitHub => Self {
                 background: hex(0xffffffff),
@@ -495,6 +520,7 @@ impl Chrome {
                 scrollbar: hex(0x8c959f66),
                 status: None,
                 ring: None,
+                switch: None,
             },
             // Content stays white; the window frame, sidebar and bars take the panel
             // grey, as JetBrains' islands do.
@@ -523,6 +549,7 @@ impl Chrome {
                     hex(0x3574f0ff),
                 ]),
                 ring: None,
+                switch: None,
             },
             LightTheme::OneLight => Self {
                 background: hex(0xfafafaff),
@@ -549,6 +576,7 @@ impl Chrome {
                     hex(0x0184bcff),
                 ]),
                 ring: None,
+                switch: None,
             },
             LightTheme::SolarizedLight => Self {
                 background: hex(0xfdf6e3ff),
@@ -575,39 +603,43 @@ impl Chrome {
                     hex(0x268bd2ff),
                 ]),
                 ring: None,
+                switch: None,
             },
         }
     }
 
     fn dark(theme: DarkTheme) -> Self {
         match theme {
-            // A neutral primary, as in the product design: white actions on near-black,
-            // with blue kept for links, focus and selection.
+            // macOS 27's dark window grey for content, with the sidebar and bars a step
+            // lighter, as Tahoe's floating sidebar sits above the content. The primary
+            // stays neutral, as in the product design; system blue is kept for links, focus
+            // and selection, and danger is softened from system red so it reads as text.
             DarkTheme::Switchfold => Self {
-                background: hex(0x17171aff),
-                foreground: hex(0xe8e8ebff),
-                muted_foreground: hex(0x8c8c97ff),
-                chrome: hex(0x1b1b1eff),
-                subtle: hex(0x1e1e22ff),
-                raised: hex(0x2b2b31ff),
-                hover: hex(0x232328ff),
-                pressed: hex(0x35353cff),
-                border: hex(0x2e2e34ff),
-                primary: hex(0xe8e8ebff),
+                background: hex(0x1e1e1fff),
+                foreground: hex(0xe6e6e8ff),
+                muted_foreground: hex(0x9d9da4ff),
+                chrome: hex(0x252527ff),
+                subtle: hex(0x2b2b2eff),
+                raised: hex(0x2c2c2fff),
+                hover: hex(0x323236ff),
+                pressed: hex(0x3a3a3eff),
+                border: hex(0x363639ff),
+                primary: hex(0xe6e6e8ff),
                 primary_hover: hex(0xffffffff),
-                primary_active: hex(0xb6b6beff),
-                on_primary: hex(0x17171aff),
-                link: hex(0x4b8cf5ff),
-                selection: hex(0x4b8cf555),
-                selected: hex(0x35353cff),
-                scrollbar: hex(0x5f5f6980),
+                primary_active: hex(0xbdbdc3ff),
+                on_primary: hex(0x1e1e1fff),
+                link: hex(0x419cffff),
+                selection: hex(0x0091ff4d),
+                selected: hex(0x3d3d42ff),
+                scrollbar: hex(0x8e8e9566),
                 status: Some([
-                    hex(0x4cc47aff),
-                    hex(0xf07272ff),
-                    hex(0xf0a04bff),
-                    hex(0x4b8cf5ff),
+                    hex(0x30d158ff),
+                    hex(0xff6961ff),
+                    hex(0xff9f3dff),
+                    hex(0x419cffff),
                 ]),
-                ring: Some(hex(0x4b8cf5ff)),
+                ring: Some(hex(0x0091ffff)),
+                switch: Some(hex(0x5a5a60ff)),
             },
             // The window frame, sidebar and bars take the Ghostty background; content
             // sits a step lighter, as JetBrains' islands do.
@@ -636,6 +668,7 @@ impl Chrome {
                     hex(0x5594faff),
                 ]),
                 ring: None,
+                switch: None,
             },
             // One Dark's hues on darker grounds, as One Dark Pro Darker has them.
             DarkTheme::OneDark => Self {
@@ -663,6 +696,7 @@ impl Chrome {
                     hex(0x61afefff),
                 ]),
                 ring: None,
+                switch: None,
             },
             DarkTheme::Espresso => Self {
                 background: hex(0x323232ff),
@@ -689,6 +723,7 @@ impl Chrome {
                     hex(0x6c99bbff),
                 ]),
                 ring: None,
+                switch: None,
             },
             DarkTheme::GitHub => Self {
                 background: hex(0x0d1117ff),
@@ -710,9 +745,46 @@ impl Chrome {
                 scrollbar: hex(0x6e768166),
                 status: None,
                 ring: None,
+                switch: None,
             },
         }
     }
+}
+
+/// macOS 27's system colors in dark mode, as AppKit reports them.
+fn tags_dark() -> [Hsla; 12] {
+    [
+        hex(0xff4245ff),
+        hex(0xff9230ff),
+        hex(0xffd600ff),
+        hex(0x30d158ff),
+        hex(0x00dac3ff),
+        hex(0x00d2e0ff),
+        hex(0x3cd3feff),
+        hex(0x0091ffff),
+        hex(0x6d7cffff),
+        hex(0xdb34f2ff),
+        hex(0xff375fff),
+        hex(0xb78a66ff),
+    ]
+}
+
+/// macOS 27's system colors in light mode, as AppKit reports them.
+fn tags_light() -> [Hsla; 12] {
+    [
+        hex(0xff383cff),
+        hex(0xff8d28ff),
+        hex(0xffcc00ff),
+        hex(0x34c759ff),
+        hex(0x00c8b3ff),
+        hex(0x00c3d0ff),
+        hex(0x00c0e8ff),
+        hex(0x0088ffff),
+        hex(0x6155f5ff),
+        hex(0xcb30e0ff),
+        hex(0xff2d55ff),
+        hex(0xac7f5eff),
+    ]
 }
 
 /// Participant colors on dark grounds.
