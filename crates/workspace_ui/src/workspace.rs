@@ -398,6 +398,7 @@ impl Workspace {
                         .update(cx, |list, cx| list.select(key.clone(), cx));
                     this.open_review(key, window, cx)
                 }
+                ReviewThreadEvent::ViewChanged => {}
             },
         );
         self.route_subscription = Some(subscription);
