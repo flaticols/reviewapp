@@ -342,15 +342,17 @@ fn dependency_numbers(body: &str) -> Vec<u64> {
 }
 
 impl GhSource {
-    fn checks(&self, repo: &RepoSlug, sha: &str) -> Vec<CheckRun> {
-        let Ok(response) = self.api(
+    /// The head commit's check runs, looked up by the pull request's ref so the head
+    /// SHA isn't needed first.
+    fn head_checks(&self, key: &PullRequestKey) -> Result<Vec<CheckRun>, ApiError> {
+        let repo = key.repo();
+        let response = self.api(
             &[&format!(
-                "repos/{repo}/commits/{sha}/check-runs?per_page=100"
+                "repos/{repo}/commits/refs/pull/{}/head/check-runs?per_page=100",
+                key.number()
             )],
             None,
-        ) else {
-            return Vec::new();
-        };
+        )?;
         let runs = response["check_runs"]
             .as_array()
             .cloned()
@@ -391,54 +393,27 @@ impl GhSource {
                 })
                 .collect()
         });
-        let failed_jobs: Vec<u64> = runs
+        Ok(runs
             .iter()
-            .filter(|run| {
-                run["status"].as_str() == Some("completed")
-                    && matches!(run["conclusion"].as_str(), Some("failure" | "timed_out"))
-            })
-            .filter_map(|run| run["id"].as_u64())
-            .filter(|id| steps_by_job.contains_key(id))
-            .collect();
-        let logs: HashMap<u64, Vec<LogLine>> = std::thread::scope(|scope| {
-            let handles: Vec<_> = failed_jobs
-                .iter()
-                .map(|job| {
-                    scope.spawn(move || {
-                        let log = self
-                            .rest_text(&format!("repos/{repo}/actions/jobs/{job}/logs"))
-                            .ok()
-                            .map(|text| tail_log(&text, LOG_TAIL));
-                        (*job, log)
-                    })
-                })
-                .collect();
-            handles
-                .into_iter()
-                .filter_map(|handle| handle.join().ok())
-                .filter_map(|(job, log)| Some((job, log?)))
-                .collect()
-        });
-        runs.iter()
             .map(|run| {
                 let status = check_status(run["status"].as_str(), run["conclusion"].as_str());
                 let elapsed = elapsed_secs(&run["started_at"], &run["completed_at"]);
                 let id = run["id"].as_u64().unwrap_or_default();
                 let steps = steps_by_job
                     .get(&id)
-                    .map(|steps| job_steps(steps, logs.get(&id).cloned()))
+                    .map(|steps| job_steps(steps))
                     .unwrap_or_default();
                 CheckRun::new(
                     id.to_string(),
                     run["name"].as_str().unwrap_or("check"),
                     status,
                     elapsed,
-                    sha,
+                    run["head_sha"].as_str().unwrap_or_default(),
                     steps,
                 )
                 .with_url(run["html_url"].as_str().unwrap_or_default())
             })
-            .collect()
+            .collect())
     }
 
     fn files(&self, key: &PullRequestKey) -> Result<Vec<diff_model::FileDiff>, ApiError> {
@@ -498,8 +473,8 @@ fn elapsed_secs(started: &Value, completed: &Value) -> u32 {
     }
 }
 
-/// A job's steps; the job's log tail goes to its first failed step.
-fn job_steps(steps: &[Value], mut log: Option<Vec<LogLine>>) -> Vec<CheckStep> {
+/// A job's steps, without logs; a failed job's log is fetched when it is opened.
+fn job_steps(steps: &[Value]) -> Vec<CheckStep> {
     steps
         .iter()
         .map(|step| {
@@ -507,16 +482,11 @@ fn job_steps(steps: &[Value], mut log: Option<Vec<LogLine>>) -> Vec<CheckStep> {
             let duration = step["completed_at"]
                 .as_str()
                 .map(|_| elapsed_secs(&step["started_at"], &step["completed_at"]));
-            let lines = if status == CheckStatus::Failed {
-                log.take().unwrap_or_default()
-            } else {
-                Vec::new()
-            };
             CheckStep::new(
                 step["name"].as_str().unwrap_or("step"),
                 status,
                 duration,
-                lines,
+                Vec::new(),
             )
         })
         .collect()
@@ -866,18 +836,6 @@ impl PullRequestSource for GhSource {
             .timeline
             .splice(after_last_push..after_last_push, files);
 
-        if let Some(head) = detail.commits.last() {
-            detail.checks = self.checks(key.repo(), &head.sha);
-            let failing_or_running = detail
-                .checks
-                .iter()
-                .filter(|check| matches!(check.status, CheckStatus::Failed | CheckStatus::Running));
-            let ids: Vec<String> = failing_or_running.map(|check| check.id.clone()).collect();
-            detail
-                .timeline
-                .extend(ids.into_iter().map(|id| TimelineItem::Check { id }));
-        }
-
         detail.depends_on = dependency_numbers(&detail.body)
             .into_iter()
             .map(|number| {
@@ -889,6 +847,18 @@ impl PullRequestSource for GhSource {
             })
             .collect();
         Ok(detail)
+    }
+
+    fn checks(&self, key: &PullRequestKey) -> Result<Vec<CheckRun>, ApiError> {
+        self.head_checks(key)
+    }
+
+    fn check_log(&self, key: &PullRequestKey, check_id: &str) -> Result<Vec<LogLine>, ApiError> {
+        let text = self.rest_text(&format!(
+            "repos/{}/actions/jobs/{check_id}/logs",
+            key.repo()
+        ))?;
+        Ok(tail_log(&text, LOG_TAIL))
     }
 
     fn submit_review(
@@ -1131,12 +1101,14 @@ mod live {
             let started = std::time::Instant::now();
             let detail = source.detail(&key).expect("detail loads");
             eprintln!(
-                "{}: {} files, {} checks in {:.1?}",
+                "{}: {} files in {:.1?}",
                 key.id(),
                 detail.files.len(),
-                detail.checks.len(),
                 started.elapsed()
             );
+            let started = std::time::Instant::now();
+            let checks = source.checks(&key).expect("checks load");
+            eprintln!("{} checks in {:.1?}", checks.len(), started.elapsed());
             return;
         }
         let started = std::time::Instant::now();

@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use pr_model::{PullRequest, PullRequestKey, RepoSlug};
-use review_model::{Actor, CheckRun, MergeMethod, PullRequestDetail, ReviewVerdict};
+use review_model::{Actor, CheckRun, LogLine, MergeMethod, PullRequestDetail, ReviewVerdict};
 
 /// A failed GitHub request, with a message suitable for the interface.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -97,8 +97,16 @@ pub trait PullRequestSource: Send + Sync {
     /// Every pull request in the viewer's inboxes.
     fn pull_requests(&self) -> Result<Vec<PullRequest>, ApiError>;
 
-    /// The full review data for one pull request.
+    /// The review data for one pull request. Its checks may be left out; they come from
+    /// [`Self::checks`].
     fn detail(&self, key: &PullRequestKey) -> Result<PullRequestDetail, ApiError>;
+
+    /// The check runs on the pull request's head commit, with their steps but not their
+    /// logs.
+    fn checks(&self, key: &PullRequestKey) -> Result<Vec<CheckRun>, ApiError>;
+
+    /// The tail of check run `check_id`'s log.
+    fn check_log(&self, key: &PullRequestKey, check_id: &str) -> Result<Vec<LogLine>, ApiError>;
 
     /// Posts a review.
     fn submit_review(
@@ -253,6 +261,15 @@ impl PullRequestSource for FixtureSource {
             }
         }
         Ok(detail)
+    }
+
+    fn checks(&self, key: &PullRequestKey) -> Result<Vec<CheckRun>, ApiError> {
+        Ok(self.detail(key)?.checks)
+    }
+
+    /// The sample's checks carry their logs already.
+    fn check_log(&self, _key: &PullRequestKey, _check_id: &str) -> Result<Vec<LogLine>, ApiError> {
+        Ok(Vec::new())
     }
 
     fn submit_review(
