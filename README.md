@@ -6,8 +6,7 @@ from the Sketch design "Switchfold Review".
 
 ## Requirements
 
-macOS 13+, Rust (stable), the GitHub CLI signed in (`gh auth login`), Xcode (for `actool`)
-and [Nushell](https://www.nushell.sh) for bundling.
+macOS 13+, Rust (stable), the GitHub CLI signed in (`gh auth login`), Xcode (for `actool`) and `make`.
 
 ## Run
 
@@ -21,12 +20,15 @@ cargo run -p app_ui -- --appearance dark          # override light/dark for this
 ## Build the .app and install it
 
 Builds a release binary, compiles the icon with `actool` and signs the bundle ad hoc.
-Without `--install` the app lands in `target/release/Switchfold Review.app`; with it, the app
-is also copied to `/Applications`, replacing an earlier copy:
+`make app` leaves the bundle in `target/release`; `make install` also copies it to
+`/Applications`, replacing an earlier copy:
 
 ```
-nu scripts/bundle.nu --install   # → /Applications/Switchfold Review.app (dev.switchfold.review)
+make app       # → target/release/Switchfold Review.app
+make install   # → /Applications/Switchfold Review.app (dev.switchfold.review)
 ```
+
+`nu scripts/bundle.nu [--install]` does the same with Nushell.
 
 The icon is `assets/AppIcon.icon`; open it in Icon Composer (inside Xcode) to edit it.
 
