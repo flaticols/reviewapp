@@ -6,12 +6,14 @@ use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext, px, size};
 use pr_model::{PullRequestKey, RepoSlug};
 use review_thread_ui::{
-    PaneState, ReviewLayout, ReviewThreadView, ScrollAnchor, TimelineFilter,
+    PaneState, ReviewLayout, ReviewPanes, ReviewThreadView, ScrollAnchor, SplitAxis,
+    TimelineFilter,
 };
 use workspace_ui::launch;
 
 /// Not the first file, so landing on it can't happen by accident.
 const RENDER: &str = "crates/review/src/render.rs";
+const HUNK: &str = "crates/review/src/hunk.rs";
 
 fn featured() -> PullRequestKey {
     PullRequestKey::new(RepoSlug::new("flaticols", "switchfold"), 482)
@@ -90,6 +92,128 @@ fn a_missing_anchor_file_scrolls_to_the_top(cx: &mut TestAppContext) {
     let (_, pane) = open_pane(state, cx);
     let scroll = pane.read_with(cx, |pane, _| pane.pane_state().scroll);
     assert_eq!(scroll, ScrollAnchor::default());
+}
+
+fn open_panes(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<ReviewPanes>) {
+    install(cx);
+    new_panes(cx)
+}
+
+/// Another review screen for the featured pull request, in the app already set up.
+fn new_panes(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<ReviewPanes>) {
+    let mut panes = None;
+    let handle = cx.open_window(size(px(1440.), px(900.)), |window, cx| {
+        let view = cx.new(|cx| ReviewPanes::new(featured(), "Review requests", window, cx));
+        panes = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    cx.run_until_parked();
+    let window: AnyWindowHandle = handle.into();
+    render(window, cx);
+    (window, panes.expect("panes were built"))
+}
+
+fn press(window: AnyWindowHandle, keys: &[&str], cx: &mut TestAppContext) {
+    cx.update_window(window, |_, window, cx| {
+        for key in keys {
+            window.press(key, cx);
+        }
+    })
+    .unwrap();
+    cx.run_until_parked();
+    render(window, cx);
+}
+
+fn count(panes: &Entity<ReviewPanes>, cx: &mut TestAppContext) -> usize {
+    panes.read_with(cx, |panes, _| panes.pane_count())
+}
+
+#[gpui_kit::test]
+fn prefix_percent_splits_side_by_side(cx: &mut TestAppContext) {
+    let (window, panes) = open_panes(cx);
+    press(window, &["ctrl-b", "%"], cx);
+    assert_eq!(count(&panes, cx), 2);
+}
+
+#[gpui_kit::test]
+fn a_split_focuses_the_new_pane(cx: &mut TestAppContext) {
+    let (window, panes) = open_panes(cx);
+    press(window, &["ctrl-b", "\""], cx);
+    assert_eq!(panes.read_with(cx, |panes, _| panes.focused_index()), 1);
+}
+
+#[gpui_kit::test]
+fn prefix_x_closes_the_focused_pane(cx: &mut TestAppContext) {
+    let (window, panes) = open_panes(cx);
+    press(window, &["ctrl-b", "%", "ctrl-b", "x"], cx);
+    assert_eq!(count(&panes, cx), 1);
+}
+
+#[gpui_kit::test]
+fn prefix_x_on_the_only_pane_does_nothing(cx: &mut TestAppContext) {
+    let (window, panes) = open_panes(cx);
+    press(window, &["ctrl-b", "x"], cx);
+    assert_eq!(count(&panes, cx), 1);
+}
+
+#[gpui_kit::test]
+fn percent_without_the_prefix_does_not_split(cx: &mut TestAppContext) {
+    let (window, panes) = open_panes(cx);
+    press(window, &["%"], cx);
+    assert_eq!(count(&panes, cx), 1);
+}
+
+#[gpui_kit::test]
+fn prefix_arrow_moves_focus_across_a_split(cx: &mut TestAppContext) {
+    let (window, panes) = open_panes(cx);
+    press(window, &["ctrl-b", "%", "ctrl-b", "left"], cx);
+    assert_eq!(panes.read_with(cx, |panes, _| panes.focused_index()), 0);
+}
+
+#[gpui_kit::test]
+fn panes_scroll_independently(cx: &mut TestAppContext) {
+    let (window, panes) = open_panes(cx);
+    press(window, &["ctrl-b", "%"], cx);
+    let [left, right] = panes.read_with(cx, |panes, _| {
+        let all = panes.panes();
+        [all[0].clone(), all[1].clone()]
+    });
+    left.update(cx, |pane, cx| pane.reveal_file(RENDER, cx));
+    right.update(cx, |pane, cx| pane.reveal_file(HUNK, cx));
+    render(window, cx);
+    let files = [&left, &right].map(|pane| pane.read_with(cx, |pane, _| pane.pane_state().scroll.file));
+    assert_eq!(files, [Some(RENDER.into()), Some(HUNK.into())]);
+}
+
+#[gpui_kit::test]
+fn reopening_the_pull_request_restores_its_panes(cx: &mut TestAppContext) {
+    let (window, _) = open_panes(cx);
+    press(window, &["ctrl-b", "%", "ctrl-b", "\""], cx);
+    let (_, reopened) = new_panes(cx);
+    assert_eq!(count(&reopened, cx), 3);
+}
+
+#[gpui_kit::test]
+fn a_late_saved_layout_does_not_replace_a_split_made_meanwhile(cx: &mut TestAppContext) {
+    let (window, _) = open_panes(cx);
+    press(window, &["ctrl-b", "%", "ctrl-b", "\""], cx);
+    let mut reopened = None;
+    cx.open_window(size(px(1440.), px(900.)), |window, cx| {
+        let view = cx.new(|cx| ReviewPanes::new(featured(), "Review requests", window, cx));
+        view.update(cx, |panes, cx| panes.split(SplitAxis::SideBySide, window, cx));
+        reopened = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(count(&reopened.expect("panes were built"), cx), 2);
+}
+
+#[gpui_kit::test]
+fn closing_the_diffing_pane_hands_the_duty_on(cx: &mut TestAppContext) {
+    let (window, panes) = open_panes(cx);
+    press(window, &["ctrl-b", "%", "ctrl-b", "left", "ctrl-b", "x"], cx);
+    let diffs = panes.read_with(cx, |panes, cx| panes.panes()[0].read(cx).diffs_locally());
+    assert!(diffs);
 }
 
 #[gpui_kit::test]

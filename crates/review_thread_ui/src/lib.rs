@@ -46,7 +46,7 @@ use syntax_ui::FileHighlights;
 use widgets_ui::EmptyState;
 
 pub use filters::TimelineFilter;
-pub use panes::{PaneState, ScrollAnchor};
+pub use panes::{Direction, PaneState, PaneTree, ReviewPanes, ScrollAnchor, SplitAxis};
 
 /// Which of a review's sidebars show. Shared by every review, so the choice stays when
 /// another pull request opens.
@@ -131,6 +131,22 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-shift-a", ReviewWithAgent, Some(CONTEXT)),
         KeyBinding::new("cmd-shift-c", CheckOut, Some(CONTEXT)),
         KeyBinding::new("cmd-enter", SubmitComment, Some(CONTEXT)),
+    ]);
+    use app_state_ui::actions::{
+        ClosePane, FocusNextPane, FocusPaneDown, FocusPaneLeft, FocusPaneRight, FocusPaneUp,
+        SplitSideBySide, SplitStacked, ZoomPane,
+    };
+    let panes = Some(panes::CONTEXT);
+    cx.bind_keys([
+        KeyBinding::new("ctrl-b %", SplitSideBySide, panes),
+        KeyBinding::new("ctrl-b \"", SplitStacked, panes),
+        KeyBinding::new("ctrl-b left", FocusPaneLeft, panes),
+        KeyBinding::new("ctrl-b right", FocusPaneRight, panes),
+        KeyBinding::new("ctrl-b up", FocusPaneUp, panes),
+        KeyBinding::new("ctrl-b down", FocusPaneDown, panes),
+        KeyBinding::new("ctrl-b o", FocusNextPane, panes),
+        KeyBinding::new("ctrl-b z", ZoomPane, panes),
+        KeyBinding::new("ctrl-b x", ClosePane, panes),
     ]);
 }
 
@@ -498,6 +514,17 @@ impl ReviewThreadView {
             outline: self.outline,
             scroll: self.scroll_anchor(),
         }
+    }
+
+    /// Shows what `state` says: its tab and tree now, its scroll once rows exist.
+    pub(crate) fn apply_pane_state(&mut self, state: PaneState, cx: &mut Context<Self>) {
+        self.set_filter(state.filter);
+        self.outline = state.outline;
+        match self.detail {
+            Some(_) => self.scroll_to_anchor(&state.scroll, cx),
+            None => self.pending_scroll = Some(state.scroll),
+        }
+        cx.notify();
     }
 
     fn scroll_anchor(&self) -> ScrollAnchor {
