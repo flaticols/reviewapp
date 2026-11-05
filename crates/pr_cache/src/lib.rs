@@ -83,6 +83,21 @@ impl PullRequestCache {
         write(&self.detail_path(key), detail, saved_at)
     }
 
+    /// What a screen saved for `key` under `name`, such as the review's pane layout.
+    pub fn load_view<T: DeserializeOwned>(&self, key: &PullRequestKey, name: &str) -> Option<T> {
+        read(&self.view_path(key, name)).map(|cached| cached.data)
+    }
+
+    /// Saves what a screen keeps for `key` under `name`, next to its review data.
+    pub fn save_view<T: Serialize>(
+        &self,
+        key: &PullRequestKey,
+        name: &str,
+        value: &T,
+    ) -> io::Result<()> {
+        write(&self.view_path(key, name), value, Timestamp::now())
+    }
+
     /// Deletes review data not saved within `max_age`, and returns how many files went.
     pub fn prune(&self, max_age: Duration) -> usize {
         let Some(cutoff) = SystemTime::now().checked_sub(max_age) else {
@@ -124,11 +139,19 @@ impl PullRequestCache {
     }
 
     fn detail_path(&self, key: &PullRequestKey) -> PathBuf {
+        self.repo_dir(key).join(format!("{}.json", key.number()))
+    }
+
+    fn view_path(&self, key: &PullRequestKey, name: &str) -> PathBuf {
+        self.repo_dir(key)
+            .join(format!("{}.{}.json", key.number(), sanitize(name)))
+    }
+
+    fn repo_dir(&self, key: &PullRequestKey) -> PathBuf {
         self.dir
             .join("pulls")
             .join(sanitize(key.repo().owner()))
             .join(sanitize(key.repo().name()))
-            .join(format!("{}.json", key.number()))
     }
 }
 
@@ -230,6 +253,30 @@ mod tests {
         .unwrap();
         assert!(cache.load_list().is_none());
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_view_state_round_trips_next_to_the_detail() {
+        let root = scratch("view");
+        let key = PullRequestKey::new(RepoSlug::new("flaticols", "switchfold"), 482);
+        let cache = PullRequestCache::new(&root, "github.com", "denis");
+        cache.save_view(&key, "panes", &vec![1u8, 2]).unwrap();
+        assert_eq!(cache.load_view::<Vec<u8>>(&key, "panes"), Some(vec![1, 2]));
+        assert!(
+            cache
+                .dir()
+                .join("pulls/flaticols/switchfold/482.panes.json")
+                .is_file()
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_missing_view_state_reads_as_none() {
+        let root = scratch("view-missing");
+        let key = PullRequestKey::new(RepoSlug::new("flaticols", "switchfold"), 482);
+        let cache = PullRequestCache::new(&root, "github.com", "denis");
+        assert_eq!(cache.load_view::<Vec<u8>>(&key, "panes"), None);
     }
 
     #[test]
