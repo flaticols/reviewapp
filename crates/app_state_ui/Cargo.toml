@@ -17,6 +17,7 @@ git_diff.workspace = true
 agent_registry.workspace = true
 editor_launch.workspace = true
 keychain.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]

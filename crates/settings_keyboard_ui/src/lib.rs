@@ -1,13 +1,18 @@
 //! Settings › Keyboard: the shortcuts Switchfold binds, read from the live keymap.
 
 use app_state_ui::actions::{
-    CheckOut, FocusFilter, FocusSearch, GoBack, OpenInZed, OpenSelected, OpenSettings, Refresh,
-    ResetZoom, ReviewWithAgent, SelectNext, SelectPrevious, SubmitComment, SubmitReview,
-    ToggleFocusMode, ToggleInspector, ToggleSidebar, ZoomIn, ZoomOut,
+    CheckOut, ClosePane, FocusFilter, FocusNextPane, FocusPaneDown, FocusPaneLeft,
+    FocusPaneRight, FocusPaneUp, FocusSearch, GoBack, OpenInZed, OpenSelected, OpenSettings,
+    Refresh, ResetZoom, ReviewWithAgent, SelectNext, SelectPrevious, SplitSideBySide,
+    SplitStacked, SubmitComment, SubmitReview, ToggleFocusMode, ToggleInspector, ToggleSidebar,
+    ZoomIn, ZoomOut, ZoomPane,
 };
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::{Action, App, IntoElement, ParentElement as _, RenderOnce, Window, div};
 use widgets_ui::{SettingsPage, SettingsRow, SettingsSection};
+
+/// Where the review's pane shortcuts are bound.
+const PANES: Option<&str> = Some("ReviewPanes");
 
 /// The Keyboard page: one row per command with its current shortcut.
 #[derive(IntoElement, Default)]
@@ -136,6 +141,28 @@ impl RenderOnce for KeyboardPage {
                     Some("Workspace"),
                     window,
                 )),
+        )
+        .child(
+            SettingsSection::titled("Panes")
+                .row(row("Split side by side", &SplitSideBySide, PANES, window))
+                .row(row("Split top and bottom", &SplitStacked, PANES, window))
+                .row(row(
+                    "Move to the pane on the left",
+                    &FocusPaneLeft,
+                    PANES,
+                    window,
+                ))
+                .row(row(
+                    "Move to the pane on the right",
+                    &FocusPaneRight,
+                    PANES,
+                    window,
+                ))
+                .row(row("Move to the pane above", &FocusPaneUp, PANES, window))
+                .row(row("Move to the pane below", &FocusPaneDown, PANES, window))
+                .row(row("Next pane", &FocusNextPane, PANES, window))
+                .row(row("Zoom the pane", &ZoomPane, PANES, window))
+                .row(row("Close the pane", &ClosePane, PANES, window)),
         )
     }
 }

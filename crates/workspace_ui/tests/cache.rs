@@ -98,3 +98,30 @@ fn a_pending_reply_survives_a_restart(cx: &mut TestAppContext) {
     });
     std::fs::remove_dir_all(&root).ok();
 }
+
+#[gpui_kit::test]
+fn a_saved_view_state_comes_back_in_the_next_run(cx: &mut TestAppContext) {
+    let root = std::env::temp_dir().join(format!("switchfold-view-{}", std::process::id()));
+    std::fs::remove_dir_all(&root).ok();
+    let cache = PullRequestCache::new(&root, "github.com", "flaticols");
+
+    let first = store(&cache, true, cx);
+    first.update(cx, |store, cx| {
+        store.save_view_state(&featured(), "panes", &7u32, cx)
+    });
+    cx.executor().advance_clock(Duration::from_secs(2));
+    cx.run_until_parked();
+
+    let next = store(&cache, false, cx);
+    let load = next.read_with(cx, |store, cx| {
+        store.load_view_state::<u32>(&featured(), "panes", cx)
+    });
+    let loaded = std::rc::Rc::new(std::cell::Cell::new(None));
+    cx.update(|cx| {
+        let loaded = loaded.clone();
+        cx.spawn(async move |_| loaded.set(load.await)).detach();
+    });
+    cx.run_until_parked();
+    assert_eq!(loaded.get(), Some(7));
+    std::fs::remove_dir_all(&root).ok();
+}

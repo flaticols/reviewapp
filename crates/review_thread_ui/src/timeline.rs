@@ -90,8 +90,7 @@ impl ReviewThreadView {
                 tabs.selected(selected)
                     .on_select(cx.listener(|this, ix: &usize, _, cx| {
                         this.show_all_commits(cx);
-                        this.set_filter(TimelineFilter::ALL[*ix]);
-                        cx.notify();
+                        this.show_filter(TimelineFilter::ALL[*ix], cx);
                     })),
             )
             .child(div().flex_1())

@@ -5,7 +5,8 @@ use std::time::Duration;
 use pr_cache::PullRequestCache;
 
 use github_api::{ApiError, DraftComment, PullRequestSource, Reply, ReviewSubmission};
-use gpui_kit::{AppContext as _, Context, EventEmitter, Task};
+use gpui_kit::{App, AppContext as _, Context, EventEmitter, Task};
+use serde::{Serialize, de::DeserializeOwned};
 use pr_model::{
     CheckStatus, PullRequest, PullRequestKey, PullRequestState, RepoSlug, ReviewDecision,
     SavedFilter, Timestamp,
@@ -65,6 +66,10 @@ pub struct PullRequestStore {
     cache: Option<Arc<PullRequestCache>>,
     /// Pending cache writes, one per pull request; replacing one cancels the earlier.
     saves: HashMap<PullRequestKey, Task<()>>,
+    /// What screens keep per pull request, such as pane layouts, by key and name.
+    view_states: HashMap<(PullRequestKey, &'static str), serde_json::Value>,
+    /// Pending view state writes; replacing one cancels the earlier.
+    view_saves: HashMap<(PullRequestKey, &'static str), Task<()>>,
     /// People who can review, per repository, once asked for.
     assignable: HashMap<RepoSlug, Vec<Actor>>,
     _clock: Task<()>,
@@ -125,6 +130,8 @@ impl PullRequestStore {
             session: Timestamp::now().unix(),
             cache,
             saves: HashMap::new(),
+            view_states: HashMap::new(),
+            view_saves: HashMap::new(),
             _clock: clock,
             _check_poll: check_poll,
         };
@@ -262,6 +269,50 @@ impl PullRequestStore {
             .ok();
         })
         .detach();
+    }
+
+    /// What a screen saved for `key` under `name`: this run's copy, or the one on disk.
+    pub fn load_view_state<T: DeserializeOwned + Send + 'static>(
+        &self,
+        key: &PullRequestKey,
+        name: &'static str,
+        cx: &App,
+    ) -> Task<Option<T>> {
+        if let Some(value) = self.view_states.get(&(key.clone(), name)) {
+            return Task::ready(serde_json::from_value(value.clone()).ok());
+        }
+        let cache = self.cache.clone();
+        let key = key.clone();
+        cx.background_spawn(async move { cache?.load_view(&key, name) })
+    }
+
+    /// Keeps `value` for `key` under `name` and writes it to disk once saves have
+    /// settled. Unlike edits to the review data, this tells no one: views already
+    /// show what they save.
+    pub fn save_view_state<T: Serialize>(
+        &mut self,
+        key: &PullRequestKey,
+        name: &'static str,
+        value: &T,
+        cx: &mut Context<Self>,
+    ) {
+        let Ok(value) = serde_json::to_value(value) else {
+            return;
+        };
+        let slot = (key.clone(), name);
+        self.view_states.insert(slot.clone(), value.clone());
+        let Some(cache) = self.cache.clone() else {
+            return;
+        };
+        let key = key.clone();
+        let task = cx.background_spawn({
+            let timer = cx.background_executor().timer(SAVE_DELAY);
+            async move {
+                timer.await;
+                cache.save_view(&key, name, &value).ok();
+            }
+        });
+        self.view_saves.insert(slot, task);
     }
 
     /// Replaces the file diffs of `key`, keeping everything else, as when diffs are

@@ -51,6 +51,8 @@ enum Scene {
     Unresolved,
     /// The thread scrolled to its first file.
     ThreadFirstFile,
+    /// The review split side by side, then the right pane split top and bottom.
+    SplitPanes,
     Submit,
     StartAgent,
     CheckLog,
@@ -72,7 +74,7 @@ enum Scene {
 }
 
 impl Scene {
-    const ALL: [Scene; 30] = [
+    const ALL: [Scene; 31] = [
         Self::List,
         Self::OneCommit,
         Self::RowMenu,
@@ -89,6 +91,7 @@ impl Scene {
         Self::Markdown,
         Self::Unresolved,
         Self::ThreadFirstFile,
+        Self::SplitPanes,
         Self::Submit,
         Self::StartAgent,
         Self::CheckLog,
@@ -123,6 +126,7 @@ impl Scene {
             Self::Markdown => "02k-markdown",
             Self::Unresolved => "02l-unresolved",
             Self::ThreadFirstFile => "02d-thread-first-file",
+            Self::SplitPanes => "02m-split-panes",
             Self::Submit => "03-submit",
             Self::StartAgent => "05a-start-agent",
             Self::CheckLog => "04-check-log",
@@ -286,6 +290,7 @@ fn render(
                 | Scene::Markdown
                 | Scene::Unresolved
                 | Scene::ThreadFirstFile
+                | Scene::SplitPanes
                 | Scene::Submit
                 | Scene::StartAgent
                 | Scene::CheckLog
@@ -320,7 +325,7 @@ fn render(
             cx,
         ),
         Scene::StartAgent => {
-            if let Some(review) = workspace.read(cx).review_view() {
+            if let Some(review) = workspace.read(cx).review_view(cx) {
                 review.update(cx, |review, cx| review.open_agent_review(window, cx));
             }
         }
@@ -357,7 +362,7 @@ fn render(
                 .right_click("toggle", cx);
         }
         Scene::OneCommit => {
-            if let Some(review) = workspace.read(cx).review_view() {
+            if let Some(review) = workspace.read(cx).review_view(cx) {
                 review.update(cx, |review, cx| {
                     let sha = review
                         .detail()
@@ -384,8 +389,27 @@ fn render(
                 cx,
             );
         }
+        Scene::SplitPanes => {
+            use gpui_kit::test::TestWindowExt as _;
+            window.render_frame(cx);
+            for key in ["ctrl-b", "%", "ctrl-b", "\""] {
+                window.press(key, cx);
+            }
+            // Each pane on another file, as a reviewer comparing them would.
+            if let Some(panes) = workspace.read(cx).review_panes() {
+                let panes = panes.read(cx).panes();
+                let files: Vec<String> = panes
+                    .first()
+                    .and_then(|pane| pane.read(cx).detail())
+                    .map(|detail| detail.files.iter().map(|file| file.path.clone()).collect())
+                    .unwrap_or_default();
+                for (pane, path) in panes.iter().zip(files.iter().skip(1)) {
+                    pane.update(cx, |pane, cx| pane.reveal_file(path, cx));
+                }
+            }
+        }
         Scene::ThreadFirstFile => {
-            if let Some(review) = workspace.read(cx).review_view() {
+            if let Some(review) = workspace.read(cx).review_view(cx) {
                 // With the sample data the first file holds tanya's thread and its reply box.
                 review.update(cx, |review, cx| {
                     let first = review
@@ -480,7 +504,7 @@ fn render(
             }
         }
         cx.update_window(window.into(), |_, _, cx| {
-            if let Some(review) = workspace.read(cx).review_view() {
+            if let Some(review) = workspace.read(cx).review_view(cx) {
                 review.update(cx, |review, cx| {
                     review.show_filter(review_thread_ui::TimelineFilter::Reviews, cx)
                 });
@@ -490,7 +514,7 @@ fn render(
     if scene == Scene::Unresolved {
         cx.run_until_parked();
         cx.update_window(window.into(), |_, _, cx| {
-            if let Some(review) = workspace.read(cx).review_view() {
+            if let Some(review) = workspace.read(cx).review_view(cx) {
                 review.update(cx, |review, cx| {
                     review.show_filter(review_thread_ui::TimelineFilter::Unresolved, cx)
                 });
@@ -504,7 +528,7 @@ fn render(
             cx.run_until_parked();
         }
         cx.update_window(window.into(), |_, _, cx| {
-            if let Some(review) = workspace.read(cx).review_view() {
+            if let Some(review) = workspace.read(cx).review_view(cx) {
                 review.update(cx, |review, cx| {
                     if scene == Scene::ReviewsTab {
                         review.show_filter(review_thread_ui::TimelineFilter::Reviews, cx)

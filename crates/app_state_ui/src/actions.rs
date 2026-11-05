@@ -49,5 +49,23 @@ gpui_kit::actions!(
         ZoomOut,
         /// Restores the default interface size.
         ResetZoom,
+        /// Splits the focused review pane into left and right.
+        SplitSideBySide,
+        /// Splits the focused review pane into top and bottom.
+        SplitStacked,
+        /// Focuses the review pane on the left.
+        FocusPaneLeft,
+        /// Focuses the review pane on the right.
+        FocusPaneRight,
+        /// Focuses the review pane above.
+        FocusPaneUp,
+        /// Focuses the review pane below.
+        FocusPaneDown,
+        /// Focuses the next review pane.
+        FocusNextPane,
+        /// Fills the review with the focused pane, or brings the others back.
+        ZoomPane,
+        /// Closes the focused review pane.
+        ClosePane,
     ]
 );

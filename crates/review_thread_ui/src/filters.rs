@@ -1,7 +1,8 @@
 use review_model::{FindingState, PullRequestDetail, TimelineItem};
+use serde::{Deserialize, Serialize};
 
 /// What the thread shows, chosen in the toolbar.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TimelineFilter {
     /// The whole conversation in the order it happened.
     #[default]

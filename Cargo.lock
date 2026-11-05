@@ -303,6 +303,7 @@ dependencies = [
  "pr_cache",
  "pr_model",
  "review_model",
+ "serde",
  "serde_json",
  "settings_model",
 ]
@@ -7207,6 +7208,8 @@ dependencies = [
  "pr_actions_ui",
  "pr_model",
  "review_model",
+ "serde",
+ "serde_json",
  "submit_review_ui",
  "syntax_ui",
  "theme_ui",

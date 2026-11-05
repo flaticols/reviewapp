@@ -10,6 +10,7 @@ mod inspector;
 mod menus;
 mod merge;
 mod outline;
+mod panes;
 mod quote;
 mod review_actions;
 mod rows;
@@ -45,6 +46,7 @@ use syntax_ui::FileHighlights;
 use widgets_ui::EmptyState;
 
 pub use filters::TimelineFilter;
+pub use panes::{Direction, PaneState, PaneTree, ReviewPanes, ScrollAnchor, SplitAxis};
 
 /// Which of a review's sidebars show. Shared by every review, so the choice stays when
 /// another pull request opens.
@@ -130,6 +132,22 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-shift-c", CheckOut, Some(CONTEXT)),
         KeyBinding::new("cmd-enter", SubmitComment, Some(CONTEXT)),
     ]);
+    use app_state_ui::actions::{
+        ClosePane, FocusNextPane, FocusPaneDown, FocusPaneLeft, FocusPaneRight, FocusPaneUp,
+        SplitSideBySide, SplitStacked, ZoomPane,
+    };
+    let panes = Some(panes::CONTEXT);
+    cx.bind_keys([
+        KeyBinding::new("ctrl-b %", SplitSideBySide, panes),
+        KeyBinding::new("ctrl-b \"", SplitStacked, panes),
+        KeyBinding::new("ctrl-b left", FocusPaneLeft, panes),
+        KeyBinding::new("ctrl-b right", FocusPaneRight, panes),
+        KeyBinding::new("ctrl-b up", FocusPaneUp, panes),
+        KeyBinding::new("ctrl-b down", FocusPaneDown, panes),
+        KeyBinding::new("ctrl-b o", FocusNextPane, panes),
+        KeyBinding::new("ctrl-b z", ZoomPane, panes),
+        KeyBinding::new("ctrl-b x", ClosePane, panes),
+    ]);
 }
 
 /// Where a thread's diffs came from.
@@ -148,6 +166,9 @@ pub enum ReviewThreadEvent {
     Back,
     /// Open another pull request, such as one this depends on.
     Open(PullRequestKey),
+    /// The pane scrolled, changed tab or showed or hid its tree, so its saved state is
+    /// out of date.
+    ViewChanged,
 }
 
 /// The review screen for one pull request.
@@ -195,6 +216,15 @@ pub struct ReviewThreadView {
     rows: Rc<Vec<rows::TimelineRow>>,
     /// The rem size the rows were measured at; a zoom remeasures them.
     measured_rem: Option<Pixels>,
+    /// Whether this pane shows its file tree; focus mode can still hide it.
+    outline: bool,
+    /// Whether this pane recomputes diffs from the local clone. One pane of a split
+    /// review does, so a clone is diffed once.
+    diffs_locally: bool,
+    /// Whether the view draws the inspector itself, as it does when it is the only pane.
+    with_inspector: bool,
+    /// Where to scroll once the review data has loaded.
+    pending_scroll: Option<ScrollAnchor>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -211,6 +241,20 @@ impl ReviewThreadView {
     pub fn new(
         key: PullRequestKey,
         back_label: impl Into<SharedString>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new_pane(key, back_label.into(), PaneState::default(), true, window, cx)
+    }
+
+    /// Opens one pane of the thread for `key`, showing what `state` says once the review
+    /// data loads. `diffs_locally` makes this the pane that diffs the local clone.
+    #[doc(hidden)]
+    pub fn new_pane(
+        key: PullRequestKey,
+        back_label: SharedString,
+        state: PaneState,
+        diffs_locally: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -269,15 +313,25 @@ impl ReviewThreadView {
                 cx.notify();
             }));
         }
+        let list_state = ListState::new(0, ListAlignment::Top, px(800.));
+        let this = cx.entity().downgrade();
+        list_state.set_scroll_handler(move |_, _, cx| {
+            let this = this.clone();
+            // The list is mid-update here; tell the owner once it is done.
+            cx.defer(move |cx| {
+                this.update(cx, |_, cx| cx.emit(ReviewThreadEvent::ViewChanged))
+                    .ok();
+            });
+        });
         let mut view = Self {
             key,
-            back_label: back_label.into(),
+            back_label,
             focus_handle: cx.focus_handle(),
             detail: None,
             load_error: None,
             diff_source: None,
             diffed_head: None,
-            filter: TimelineFilter::Everything,
+            filter: state.filter,
             mode: DiffMode::Unified,
             collapsed: HashSet::new(),
             collapse_initialized: false,
@@ -288,7 +342,7 @@ impl ReviewThreadView {
             new_thread: None,
             editing_finding: None,
             last_draft: None,
-            list_state: ListState::new(0, ListAlignment::Top, px(800.)),
+            list_state,
             file_tree,
             file_tree_paths: Vec::new(),
             folded_dirs: HashSet::new(),
@@ -302,6 +356,10 @@ impl ReviewThreadView {
             start_form_open: None,
             rows: Rc::default(),
             measured_rem: None,
+            outline: state.outline,
+            diffs_locally,
+            with_inspector: true,
+            pending_scroll: Some(state.scroll),
             _subscriptions: subscriptions,
         };
         view.sync_detail(window, cx);
@@ -361,7 +419,8 @@ impl ReviewThreadView {
                     }
                 }
                 let head = detail.commits.last().map(|commit| commit.sha.clone());
-                if self.diff_source.is_none() || self.diffed_head != head {
+                if self.diffs_locally && (self.diff_source.is_none() || self.diffed_head != head)
+                {
                     self.diffed_head = head;
                     self.diff_locally(&detail, cx);
                 }
@@ -371,6 +430,9 @@ impl ReviewThreadView {
                 self.load_error = None;
                 if reloaded {
                     self.list_state.remeasure();
+                }
+                if let Some(anchor) = self.pending_scroll.take() {
+                    self.scroll_to_anchor(&anchor, cx);
                 }
             }
             Some(DetailState::Failed(error)) => self.load_error = Some(error.into()),
@@ -421,6 +483,107 @@ impl ReviewThreadView {
     /// Where the diffs shown came from.
     pub fn diff_source(&self) -> Option<DiffSource> {
         self.diff_source
+    }
+
+    /// Whether this pane is the one that diffs the local clone.
+    #[doc(hidden)]
+    pub fn diffs_locally(&self) -> bool {
+        self.diffs_locally
+    }
+
+    /// Makes this pane the one that diffs the local clone, or not. Taking the duty on
+    /// diffs right away, as another pane that did may have closed.
+    pub(crate) fn set_diffs_locally(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.diffs_locally = on;
+        if let (true, Some(detail)) = (on, self.detail.clone()) {
+            self.diffed_head = detail.commits.last().map(|commit| commit.sha.clone());
+            self.diff_locally(&detail, cx);
+        }
+    }
+
+    /// Hides the inspector, for a host that draws one inspector for many panes.
+    pub(crate) fn set_with_inspector(&mut self, on: bool) {
+        self.with_inspector = on;
+    }
+
+    /// What this pane would need to look the same next time.
+    #[doc(hidden)]
+    pub fn pane_state(&self) -> PaneState {
+        PaneState {
+            filter: self.filter,
+            outline: self.outline,
+            scroll: self.scroll_anchor(),
+        }
+    }
+
+    /// Shows what `state` says: its tab and tree now, its scroll once rows exist.
+    pub(crate) fn apply_pane_state(&mut self, state: PaneState, cx: &mut Context<Self>) {
+        self.set_filter(state.filter);
+        self.outline = state.outline;
+        match self.detail {
+            Some(_) => self.scroll_to_anchor(&state.scroll, cx),
+            None => self.pending_scroll = Some(state.scroll),
+        }
+        cx.notify();
+    }
+
+    fn scroll_anchor(&self) -> ScrollAnchor {
+        let top = self.list_state.logical_scroll_top();
+        let offset = top.offset_in_item.as_f32();
+        let file = match self.rows.get(top.item_ix) {
+            Some(rows::TimelineRow::File { item, .. }) => match self.items.get(*item) {
+                Some(TimelineItem::File { path }) => Some(path.clone()),
+                _ => None,
+            },
+            _ => None,
+        };
+        match file.and_then(|path| Some((self.header_row(&path)?, path))) {
+            Some((header, path)) => ScrollAnchor {
+                file: Some(path),
+                row: top.item_ix - header,
+                offset,
+            },
+            None => ScrollAnchor {
+                file: None,
+                row: top.item_ix,
+                offset,
+            },
+        }
+    }
+
+    /// Scrolls to `anchor`, or to the top when its file or row no longer shows.
+    fn scroll_to_anchor(&mut self, anchor: &ScrollAnchor, cx: &App) {
+        self.sync_rows(cx);
+        let row = match &anchor.file {
+            Some(path) => self.header_row(path).map(|header| header + anchor.row),
+            None => Some(anchor.row),
+        };
+        let offset = match row {
+            Some(item_ix) if item_ix < self.rows.len() => ListOffset {
+                item_ix,
+                offset_in_item: px(anchor.offset),
+            },
+            _ => ListOffset::default(),
+        };
+        self.list_state.scroll_to(offset);
+    }
+
+    /// Whether the file tree shows: this pane's choice, unless focus mode hid it.
+    pub fn outline_visible(&self, cx: &App) -> bool {
+        self.outline && ReviewLayout::get(cx).outline
+    }
+
+    /// Shows or hides this pane's file tree. In focus mode it ends focus mode and shows
+    /// the tree, as the shared toggle did.
+    pub fn toggle_outline(&mut self, cx: &mut Context<Self>) {
+        if ReviewLayout::get(cx).outline {
+            self.outline = !self.outline;
+        } else {
+            ReviewLayout::toggle_outline(cx);
+            self.outline = true;
+        }
+        cx.emit(ReviewThreadEvent::ViewChanged);
+        cx.notify();
     }
 
     fn new_reply_input(
@@ -633,12 +796,14 @@ impl ReviewThreadView {
                 offset_in_item: px(0.),
             });
         }
+        cx.emit(ReviewThreadEvent::ViewChanged);
         cx.notify();
     }
 
     /// Switches the timeline to `filter`, as the toolbar tabs do.
     pub fn show_filter(&mut self, filter: TimelineFilter, cx: &mut Context<Self>) {
         self.set_filter(filter);
+        cx.emit(ReviewThreadEvent::ViewChanged);
         cx.notify();
     }
 
@@ -762,6 +927,24 @@ impl ReviewThreadView {
     }
 
     fn render_body(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+        let pane = self.render_pane(window, cx);
+        let inspector = self
+            .with_inspector
+            .then(|| self.render_inspector_panel(cx))
+            .flatten();
+        match inspector {
+            Some(inspector) => with_inspector(pane, inspector, window, cx),
+            None => pane,
+        }
+    }
+
+    /// The pane without the inspector: its file tree, toolbar and timeline, or the
+    /// loading state.
+    pub(crate) fn render_pane(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::AnyElement {
         let Some(detail) = self.detail.clone() else {
             return match &self.load_error {
                 Some(error) => EmptyState::new(
@@ -774,11 +957,10 @@ impl ReviewThreadView {
             };
         };
         let rem = window.rem_size();
-        let layout = ReviewLayout::get(cx);
         h_resizable("review-panels")
             .child(
                 resizable_panel()
-                    .visible(layout.outline)
+                    .visible(self.outline_visible(cx))
                     .size(rem * 16.25)
                     .size_range(px(180.)..px(520.))
                     .child(self.render_outline(&detail, cx)),
@@ -792,15 +974,37 @@ impl ReviewThreadView {
                         .child(self.render_timeline(window, cx)),
                 ),
             )
-            .child(
-                resizable_panel()
-                    .visible(layout.inspector)
-                    .size(rem * 20.)
-                    .size_range(px(240.)..px(480.))
-                    .child(self.render_inspector(&detail, cx)),
-            )
             .into_any_element()
     }
+
+    /// The reviewers, checks and dependencies sidebar, once the review data has loaded.
+    pub(crate) fn render_inspector_panel(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui_kit::AnyElement> {
+        let detail = self.detail.clone()?;
+        Some(self.render_inspector(&detail, cx).into_any_element())
+    }
+}
+
+/// `pane` with the inspector on its right, sized and shown as the review layout says.
+pub(crate) fn with_inspector(
+    pane: gpui_kit::AnyElement,
+    inspector: gpui_kit::AnyElement,
+    window: &Window,
+    cx: &App,
+) -> gpui_kit::AnyElement {
+    let rem = window.rem_size();
+    h_resizable("review-inspector")
+        .child(resizable_panel().child(pane))
+        .child(
+            resizable_panel()
+                .visible(ReviewLayout::get(cx).inspector)
+                .size(rem * 20.)
+                .size_range(px(240.)..px(480.))
+                .child(inspector),
+        )
+        .into_any_element()
 }
 
 /// A multi-line editor for replies, line comments and finding edits: two rows to start,

@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use zed_bridge::mcp::{BridgeListener, BridgeReply, BridgeRequest, tool};
 use zed_bridge::{Located, SwitchfoldLink};
 
-use super::{Route, Workspace};
+use super::Workspace;
 
 /// How long a link or tool call waits for a pull request's review data.
 const LOAD_TIMEOUT: Duration = Duration::from_secs(45);
@@ -164,11 +164,8 @@ impl Workspace {
             .or_else(|| git_diff::LocalClone::open(&clone).ok()?.github_slug())
     }
 
-    fn current_review(&self, _: &Context<Self>) -> Option<Entity<ReviewThreadView>> {
-        match &self.route {
-            Route::Review(view) => Some(view.clone()),
-            _ => None,
-        }
+    fn current_review(&self, cx: &Context<Self>) -> Option<Entity<ReviewThreadView>> {
+        self.review_view(cx)
     }
 
     /// Shows `key`, reusing the open review when it's the same pull request.
