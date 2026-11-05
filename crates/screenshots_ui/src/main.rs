@@ -320,7 +320,7 @@ fn render(
             cx,
         ),
         Scene::StartAgent => {
-            if let Some(review) = workspace.read(cx).review_view() {
+            if let Some(review) = workspace.read(cx).review_view(cx) {
                 review.update(cx, |review, cx| review.open_agent_review(window, cx));
             }
         }
@@ -357,7 +357,7 @@ fn render(
                 .right_click("toggle", cx);
         }
         Scene::OneCommit => {
-            if let Some(review) = workspace.read(cx).review_view() {
+            if let Some(review) = workspace.read(cx).review_view(cx) {
                 review.update(cx, |review, cx| {
                     let sha = review
                         .detail()
@@ -385,7 +385,7 @@ fn render(
             );
         }
         Scene::ThreadFirstFile => {
-            if let Some(review) = workspace.read(cx).review_view() {
+            if let Some(review) = workspace.read(cx).review_view(cx) {
                 // With the sample data the first file holds tanya's thread and its reply box.
                 review.update(cx, |review, cx| {
                     let first = review
@@ -480,7 +480,7 @@ fn render(
             }
         }
         cx.update_window(window.into(), |_, _, cx| {
-            if let Some(review) = workspace.read(cx).review_view() {
+            if let Some(review) = workspace.read(cx).review_view(cx) {
                 review.update(cx, |review, cx| {
                     review.show_filter(review_thread_ui::TimelineFilter::Reviews, cx)
                 });
@@ -490,7 +490,7 @@ fn render(
     if scene == Scene::Unresolved {
         cx.run_until_parked();
         cx.update_window(window.into(), |_, _, cx| {
-            if let Some(review) = workspace.read(cx).review_view() {
+            if let Some(review) = workspace.read(cx).review_view(cx) {
                 review.update(cx, |review, cx| {
                     review.show_filter(review_thread_ui::TimelineFilter::Unresolved, cx)
                 });
@@ -504,7 +504,7 @@ fn render(
             cx.run_until_parked();
         }
         cx.update_window(window.into(), |_, _, cx| {
-            if let Some(review) = workspace.read(cx).review_view() {
+            if let Some(review) = workspace.read(cx).review_view(cx) {
                 review.update(cx, |review, cx| {
                     if scene == Scene::ReviewsTab {
                         review.show_filter(review_thread_ui::TimelineFilter::Reviews, cx)

@@ -90,6 +90,25 @@ fn keyboard_opens_a_pull_request_and_escape_returns(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn ctrl_b_percent_splits_the_open_review(cx: &mut TestAppContext) {
+    let (window, workspace) = open_featured(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.press("ctrl-b", cx);
+        window.press("%", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let panes = cx.update(|cx| {
+        workspace
+            .read(cx)
+            .review_panes()
+            .map(|panes| panes.read(cx).pane_count())
+    });
+    assert_eq!(panes, Some(2));
+}
+
+#[gpui_kit::test]
 fn viewed_checkbox_marks_the_file(cx: &mut TestAppContext) {
     let (window, _) = open_featured(cx);
     let path = "crates/review/src/thread.rs";
@@ -594,7 +613,7 @@ fn menu_actions_close_reopen_approve_and_request_reviews(cx: &mut TestAppContext
 fn picking_a_commit_shows_only_its_changes(cx: &mut TestAppContext) {
     let (window, workspace) = open_featured(cx);
     let review = cx
-        .update(|cx| workspace.read(cx).review_view())
+        .update(|cx| workspace.read(cx).review_view(cx))
         .expect("review open");
     let (all, sha) = cx.update(|cx| {
         let review = review.read(cx);

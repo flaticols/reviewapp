@@ -13,7 +13,7 @@ use gpui_kit::{
 };
 use pr_list_ui::{PullRequestList, PullRequestListEvent};
 use pr_model::RepoSlug;
-use review_thread_ui::{ReviewThreadEvent, ReviewThreadView};
+use review_thread_ui::{ReviewPanes, ReviewThreadEvent, ReviewThreadView};
 use settings_model::{DEFAULT_FONT_SIZE, FONT_SIZES, display_path};
 use settings_ui::{SettingsEvent, SettingsPageKind, SettingsView};
 use sign_in_ui::{SignInEvent, SignInView};
@@ -52,7 +52,7 @@ pub fn init(cx: &mut App) {
 enum Route {
     SignIn(Entity<SignInView>),
     PullRequests,
-    Review(Entity<ReviewThreadView>),
+    Review(Entity<ReviewPanes>),
     Settings(Entity<SettingsView>),
 }
 
@@ -94,7 +94,7 @@ impl Workspace {
                     PullRequestListEvent::Open(key) => this.open_review(key.clone(), window, cx),
                     PullRequestListEvent::ReviewWithAgent(key) => {
                         this.open_review(key.clone(), window, cx);
-                        if let Some(review) = this.review_view() {
+                        if let Some(review) = this.review_view(cx) {
                             review.update(cx, |review, cx| review.open_agent_review(window, cx));
                         }
                     }
@@ -253,6 +253,8 @@ impl Workspace {
         let files: Vec<PaletteEntry> = match &self.route {
             Route::Review(review) => review
                 .read(cx)
+                .focused_view()
+                .read(cx)
                 .detail()
                 .map(|detail| {
                     detail
@@ -342,14 +344,24 @@ impl Workspace {
         } else if let Some(path) = key.strip_prefix("file:")
             && let Route::Review(review) = &self.route
         {
-            review.update(cx, |review, cx| review.reveal_file(path, cx));
+            review
+                .read(cx)
+                .focused_view()
+                .update(cx, |review, cx| review.reveal_file(path, cx));
         }
     }
 
-    /// The open review screen, if any.
-    pub fn review_view(&self) -> Option<Entity<ReviewThreadView>> {
+    /// The focused pane of the open review, if any.
+    pub fn review_view(&self, cx: &App) -> Option<Entity<ReviewThreadView>> {
+        self.review_panes()
+            .map(|panes| panes.read(cx).focused_view())
+    }
+
+    /// The open review's panes, if any.
+    #[doc(hidden)]
+    pub fn review_panes(&self) -> Option<Entity<ReviewPanes>> {
         match &self.route {
-            Route::Review(review) => Some(review.clone()),
+            Route::Review(panes) => Some(panes.clone()),
             _ => None,
         }
     }
@@ -386,7 +398,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let back_label = self.pull_request_list.read(cx).title(cx);
-        let review = cx.new(|cx| ReviewThreadView::new(key, back_label, window, cx));
+        let review = cx.new(|cx| ReviewPanes::new(key, back_label, window, cx));
         let subscription = cx.subscribe_in(
             &review,
             window,
@@ -460,11 +472,12 @@ impl Workspace {
             Route::SignIn(_) => {
                 return title_bar.without_sidebar_toggle().without_account();
             }
-            Route::Review(view) => {
+            Route::Review(panes) => {
+                let view = panes.read(cx).focused_view();
                 title_bar = title_bar
-                    .sidebar_open(review_thread_ui::ReviewLayout::get(cx).outline)
+                    .sidebar_open(view.read(cx).outline_visible(cx))
                     .title(review_thread_ui::PullRequestTitle::new(view.clone()))
-                    .actions(review_thread_ui::ReviewActions::new(view.clone()))
+                    .actions(review_thread_ui::ReviewActions::new(view))
             }
             Route::Settings(_) => title_bar = title_bar.without_sidebar_toggle(),
         }
@@ -531,8 +544,8 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &app_state_ui::actions::ToggleSidebar, _, cx| {
                     // The list handles its own sidebar before the action reaches here.
-                    if matches!(this.route, Route::Review(_)) {
-                        review_thread_ui::ReviewLayout::toggle_outline(cx);
+                    if let Some(review) = this.review_view(cx) {
+                        review.update(cx, |review, cx| review.toggle_outline(cx));
                     }
                 }),
             )
