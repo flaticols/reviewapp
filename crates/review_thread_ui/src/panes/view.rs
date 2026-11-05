@@ -8,7 +8,7 @@ use app_state_ui::actions::{
     ClosePane, FocusNextPane, FocusPaneDown, FocusPaneLeft, FocusPaneRight, FocusPaneUp,
     SplitSideBySide, SplitStacked, ZoomPane,
 };
-use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
+use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, CursorStyle, DragMoveEvent, Empty, Entity,
     EntityId, EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
@@ -268,9 +268,11 @@ impl ReviewPanes {
                 let second = self.render_node(second, boundary, framed, cx);
                 let border = cx.theme().border;
                 let side_by_side = *axis == SplitAxis::SideBySide;
+                // Plain flex, not h_flex: its centred items would shrink each half to
+                // its content instead of stretching it across the split.
                 let container = match axis {
-                    SplitAxis::SideBySide => h_flex(),
-                    SplitAxis::Stacked => v_flex(),
+                    SplitAxis::SideBySide => div().flex().flex_row(),
+                    SplitAxis::Stacked => div().flex().flex_col(),
                 };
                 container
                     .id(("pane-split", boundary))

@@ -128,6 +128,44 @@ fn count(panes: &Entity<ReviewPanes>, cx: &mut TestAppContext) -> usize {
     panes.read_with(cx, |panes, _| panes.pane_count())
 }
 
+/// Each pane's file tree column, measured in the last frame.
+fn outline_heights(
+    window: AnyWindowHandle,
+    panes: &Entity<ReviewPanes>,
+    cx: &mut TestAppContext,
+) -> Vec<f32> {
+    let ids: Vec<u64> = panes.read_with(cx, |panes, _| {
+        panes.panes().iter().map(|pane| pane.entity_id().as_u64()).collect()
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        ids.iter()
+            .map(|id| {
+                window
+                    .within(("review-pane", *id))
+                    .find("outline")
+                    .bounds()
+                    .size
+                    .height
+                    .as_f32()
+            })
+            .collect()
+    })
+    .unwrap()
+}
+
+/// The window is 900 high: a side-by-side pane fills it, stacked ones share it.
+#[gpui_kit::test]
+fn every_pane_fills_its_share_of_the_window(cx: &mut TestAppContext) {
+    let (window, panes) = open_panes(cx);
+    press(window, &["ctrl-b", "%", "ctrl-b", "\""], cx);
+    let heights = outline_heights(window, &panes, cx);
+    assert!(
+        heights.iter().all(|height| *height > 400.),
+        "pane heights: {heights:?}"
+    );
+}
+
 #[gpui_kit::test]
 fn prefix_percent_splits_side_by_side(cx: &mut TestAppContext) {
     let (window, panes) = open_panes(cx);
@@ -230,3 +268,4 @@ fn hiding_one_panes_tree_leaves_the_setting_for_new_panes_alone(cx: &mut TestApp
     pane.update(cx, |pane, cx| pane.toggle_outline(cx));
     assert!(cx.update(|cx| ReviewLayout::get(cx).outline));
 }
+
