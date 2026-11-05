@@ -29,10 +29,24 @@ pub struct CheckLogView {
 }
 
 impl CheckLogView {
-    /// A view of check `check_id` on pull request `key`.
+    /// A view of check `check_id` on pull request `key`. A failed check's log is fetched
+    /// now unless it is already here.
     pub fn new(key: PullRequestKey, check_id: String, cx: &mut Context<Self>) -> Self {
         let store = cx.stores().pull_requests().clone();
         let subscription = cx.observe(&store, |_, _, cx| cx.notify());
+        let needs_log = store
+            .read(cx)
+            .loaded_detail(&key)
+            .and_then(|detail| detail.check(&check_id))
+            .is_some_and(|check| {
+                check
+                    .steps
+                    .iter()
+                    .any(|step| step.status == CheckStatus::Failed && step.log.is_empty())
+            });
+        if needs_log {
+            store.update(cx, |store, cx| store.load_check_log(&key, &check_id, cx));
+        }
         Self {
             key,
             check_id,
@@ -59,7 +73,12 @@ impl CheckLogView {
         )
     }
 
-    fn render_step(&self, step: &CheckStep, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_step(
+        &self,
+        step: &CheckStep,
+        log_loading: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let expanded = self.expanded.contains(&step.name);
         let has_log = !step.log.is_empty();
         let name = step.name.clone();
@@ -151,7 +170,9 @@ impl CheckLogView {
                         .py_1()
                         .text_meta()
                         .text_color(cx.theme().muted_foreground)
-                        .child(if failed {
+                        .child(if failed && log_loading {
+                            "Loading log…"
+                        } else if failed {
                             "This step failed without output."
                         } else {
                             "No output."
@@ -232,10 +253,15 @@ impl Render for CheckLogView {
             )
             .child(div().h_px().bg(cx.theme().border))
             .child({
+                let log_loading = cx
+                    .stores()
+                    .pull_requests()
+                    .read(cx)
+                    .check_log_loading(&self.key, &check.id);
                 let steps: Vec<_> = check
                     .steps
                     .iter()
-                    .map(|step| self.render_step(step, cx))
+                    .map(|step| self.render_step(step, log_loading, cx))
                     .collect();
                 v_flex().gap_0p5().children(steps)
             })

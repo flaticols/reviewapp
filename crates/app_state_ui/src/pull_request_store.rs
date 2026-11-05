@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,8 +12,8 @@ use pr_model::{
     SavedFilter, Timestamp,
 };
 use review_model::{
-    Actor, AgentFinding, CheckRun, Comment, FindingState, PullRequestDetail, ReviewThread,
-    ReviewVerdict, ReviewerState, TimelineItem,
+    Actor, AgentFinding, CheckRun, Comment, FindingState, LogLine, PullRequestDetail,
+    ReviewThread, ReviewVerdict, ReviewerState, TimelineItem,
 };
 
 /// How often running checks are polled.
@@ -24,6 +24,9 @@ const CLOCK_TICK: Duration = Duration::from_secs(30);
 const SAVE_DELAY: Duration = Duration::from_millis(750);
 /// Review data not opened for this long is deleted from the cache.
 const CACHE_MAX_AGE: Duration = Duration::from_secs(60 * 60 * 24 * 30);
+
+/// A request to GitHub running in the background.
+type Fetch<T> = Task<Result<T, ApiError>>;
 
 /// Whether the pull request list has been loaded.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,6 +75,8 @@ pub struct PullRequestStore {
     view_saves: HashMap<(PullRequestKey, &'static str), Task<()>>,
     /// People who can review, per repository, once asked for.
     assignable: HashMap<RepoSlug, Vec<Actor>>,
+    /// Check logs being fetched, by pull request and check id.
+    log_requests: HashSet<(PullRequestKey, String)>,
     _clock: Task<()>,
     _check_poll: Task<()>,
 }
@@ -132,6 +137,7 @@ impl PullRequestStore {
             saves: HashMap::new(),
             view_states: HashMap::new(),
             view_saves: HashMap::new(),
+            log_requests: HashSet::new(),
             _clock: clock,
             _check_poll: check_poll,
         };
@@ -224,9 +230,7 @@ impl PullRequestStore {
             return;
         }
         self.details.insert(key.clone(), DetailState::Loading);
-        let source = self.source.clone();
-        let request_key = key.clone();
-        let fetch = cx.background_spawn(async move { source.detail(&request_key) });
+        let (fetch, checks) = self.fetch_detail_and_checks(key, cx);
         let cache = self.cache.clone();
         let cache_key = key.clone();
         let cached = cx
@@ -251,6 +255,7 @@ impl PullRequestStore {
                 let state = match (result, this.details.remove(&key)) {
                     (Ok(mut fresh), Some(DetailState::Loaded(current))) => {
                         carry_local(&mut fresh, &current);
+                        keep_checks_until_fresh(&mut fresh, &current);
                         DetailState::Loaded(Box::new(fresh))
                     }
                     (Ok(fresh), _) => DetailState::Loaded(Box::new(fresh)),
@@ -263,12 +268,28 @@ impl PullRequestStore {
                 if loaded {
                     this.save_detail(&key, cx);
                 }
+                this.apply_checks_when_ready(&key, checks, cx);
                 cx.emit(PullRequestStoreEvent::DetailChanged(key));
                 cx.notify();
             })
             .ok();
         })
         .detach();
+    }
+
+    /// Starts fetching `key`'s detail and its checks at the same time.
+    fn fetch_detail_and_checks(
+        &self,
+        key: &PullRequestKey,
+        cx: &mut Context<Self>,
+    ) -> (Fetch<PullRequestDetail>, Fetch<Vec<CheckRun>>) {
+        let source = self.source.clone();
+        let request_key = key.clone();
+        let detail = cx.background_spawn(async move { source.detail(&request_key) });
+        let source = self.source.clone();
+        let request_key = key.clone();
+        let checks = cx.background_spawn(async move { source.checks(&request_key) });
+        (detail, checks)
     }
 
     /// What a screen saved for `key` under `name`: this run's copy, or the one on disk.
@@ -573,17 +594,61 @@ impl PullRequestStore {
     /// Fetches fresh check runs for `key` now, outside the polling schedule.
     pub fn refresh_checks(&mut self, key: &PullRequestKey, cx: &mut Context<Self>) {
         let source = self.source.clone();
+        let request_key = key.clone();
+        let checks = cx.background_spawn(async move { source.checks(&request_key) });
+        self.apply_checks_when_ready(key, checks, cx);
+    }
+
+    /// Fetches the log of check `check_id` on `key` and puts its tail on the failed step,
+    /// unless it is being fetched already. A failed fetch leaves the step without one.
+    pub fn load_check_log(&mut self, key: &PullRequestKey, check_id: &str, cx: &mut Context<Self>) {
+        let request = (key.clone(), check_id.to_string());
+        if !self.log_requests.insert(request.clone()) {
+            return;
+        }
+        let source = self.source.clone();
+        let log = cx.background_spawn({
+            let (key, check_id) = request.clone();
+            async move { source.check_log(&key, &check_id) }
+        });
+        cx.spawn(async move |this, cx| {
+            let result = log.await;
+            this.update(cx, |this, cx| {
+                this.log_requests.remove(&request);
+                let (key, check_id) = &request;
+                match result {
+                    Ok(lines) => {
+                        this.update_detail(key, cx, |detail| put_check_log(detail, check_id, lines))
+                    }
+                    Err(_) => cx.notify(),
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Whether the log of check `check_id` on `key` is being fetched.
+    pub fn check_log_loading(&self, key: &PullRequestKey, check_id: &str) -> bool {
+        self.log_requests
+            .contains(&(key.clone(), check_id.to_string()))
+    }
+
+    /// Applies `checks` to `key`'s loaded detail once they arrive; a failed fetch leaves
+    /// the shown checks alone.
+    fn apply_checks_when_ready(
+        &self,
+        key: &PullRequestKey,
+        checks: Fetch<Vec<CheckRun>>,
+        cx: &mut Context<Self>,
+    ) {
         let key = key.clone();
         cx.spawn(async move |this, cx| {
-            let request_key = key.clone();
-            let Ok(fresh) = cx
-                .background_spawn(async move { source.detail(&request_key) })
-                .await
-            else {
+            let Ok(fresh) = checks.await else {
                 return;
             };
             this.update(cx, |this, cx| {
-                this.update_detail(&key, cx, |detail| merge_checks(detail, fresh.checks));
+                this.update_detail(&key, cx, |detail| apply_checks(detail, fresh));
             })
             .ok();
         })
@@ -605,21 +670,7 @@ impl PullRequestStore {
             })
             .collect();
         for key in running {
-            let source = self.source.clone();
-            cx.spawn(async move |this, cx| {
-                let request_key = key.clone();
-                let Ok(fresh) = cx
-                    .background_spawn(async move { source.detail(&request_key) })
-                    .await
-                else {
-                    return;
-                };
-                this.update(cx, |this, cx| {
-                    this.update_detail(&key, cx, |detail| merge_checks(detail, fresh.checks));
-                })
-                .ok();
-            })
-            .detach();
+            self.refresh_checks(&key, cx);
         }
     }
 
@@ -699,23 +750,21 @@ impl PullRequestStore {
     /// Fetches `key` again and replaces what is shown, keeping what only exists here,
     /// as after merging or updating its branch.
     pub fn reload_detail(&mut self, key: &PullRequestKey, cx: &mut Context<Self>) {
-        let source = self.source.clone();
+        let (fetch, checks) = self.fetch_detail_and_checks(key, cx);
         let key = key.clone();
         cx.spawn(async move |this, cx| {
-            let request_key = key.clone();
-            let Ok(mut fresh) = cx
-                .background_spawn(async move { source.detail(&request_key) })
-                .await
-            else {
+            let Ok(mut fresh) = fetch.await else {
                 return;
             };
             this.update(cx, |this, cx| {
                 if let Some(DetailState::Loaded(current)) = this.details.get(&key) {
                     carry_local(&mut fresh, current);
+                    keep_checks_until_fresh(&mut fresh, current);
                 }
                 this.details
                     .insert(key.clone(), DetailState::Loaded(Box::new(fresh)));
                 this.save_detail(&key, cx);
+                this.apply_checks_when_ready(&key, checks, cx);
                 cx.emit(PullRequestStoreEvent::DetailChanged(key));
                 cx.notify();
             })
@@ -1099,12 +1148,66 @@ fn detail_lacks(findings: &[AgentFinding], id: &str) -> bool {
     !findings.iter().any(|finding| finding.id == id)
 }
 
-fn merge_checks(detail: &mut PullRequestDetail, fresh: Vec<CheckRun>) {
-    for fresh in fresh {
-        if let Some(check) = detail.checks.iter_mut().find(|c| c.id == fresh.id) {
-            *check = fresh;
+/// Shows `current`'s checks on `fresh` when it came without any, so they don't blink
+/// out while fresh checks load.
+fn keep_checks_until_fresh(fresh: &mut PullRequestDetail, current: &PullRequestDetail) {
+    if fresh.checks.is_empty() {
+        apply_checks(fresh, current.checks.clone());
+    }
+}
+
+/// Puts a job's log tail on its first failed step that has no log yet.
+fn put_check_log(detail: &mut PullRequestDetail, check_id: &str, lines: Vec<LogLine>) {
+    let step = detail
+        .checks
+        .iter_mut()
+        .find(|check| check.id == check_id)
+        .and_then(|check| {
+            check
+                .steps
+                .iter_mut()
+                .find(|step| step.status == CheckStatus::Failed && step.log.is_empty())
+        });
+    if let Some(step) = step {
+        step.log = lines;
+    }
+}
+
+/// Replaces `detail`'s checks with `fresh`. A log fetched earlier stays on its step
+/// while the fresh copy has none, and failing or running checks get a timeline entry.
+fn apply_checks(detail: &mut PullRequestDetail, mut fresh: Vec<CheckRun>) {
+    for check in &mut fresh {
+        let Some(old) = detail.checks.iter().find(|old| old.id == check.id) else {
+            continue;
+        };
+        for step in check.steps.iter_mut().filter(|step| step.log.is_empty()) {
+            if let Some(old_step) = old.steps.iter().find(|old| old.name == step.name) {
+                step.log = old_step.log.clone();
+            }
         }
     }
+    detail.timeline.retain(|item| match item {
+        TimelineItem::Check { id } => fresh.iter().any(|check| &check.id == id),
+        _ => true,
+    });
+    let shown: Vec<String> = detail
+        .timeline
+        .iter()
+        .filter_map(|item| match item {
+            TimelineItem::Check { id } => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    let joining: Vec<TimelineItem> = fresh
+        .iter()
+        .filter(|check| matches!(check.status, CheckStatus::Failed | CheckStatus::Running))
+        .filter(|check| !shown.contains(&check.id))
+        .map(|check| TimelineItem::Check {
+            id: check.id.clone(),
+        })
+        .collect();
+    detail.timeline.extend(joining);
+    detail.checks = fresh;
     refresh_head_ci(detail);
 }
 
@@ -1231,7 +1334,103 @@ mod tests {
     fn a_failed_check_fails_the_head_commit() {
         let mut detail = sample();
         let failed = fixtures::snapshot_check(CheckStatus::Failed, 62);
-        merge_checks(&mut detail, vec![failed]);
+        apply_checks(&mut detail, vec![failed]);
         assert_eq!(detail.commits.last().unwrap().ci, Some(CheckStatus::Failed));
+    }
+
+    fn check_items(detail: &PullRequestDetail) -> Vec<String> {
+        detail
+            .timeline
+            .iter()
+            .filter_map(|item| match item {
+                TimelineItem::Check { id } => Some(id.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn failed_step_log(check: &CheckRun) -> Vec<String> {
+        check
+            .steps
+            .iter()
+            .filter(|step| step.status == CheckStatus::Failed)
+            .flat_map(|step| step.log.iter().map(|line| line.text.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn applied_checks_replace_the_old_ones() {
+        let mut detail = sample();
+        apply_checks(
+            &mut detail,
+            vec![fixtures::snapshot_check(CheckStatus::Failed, 62)],
+        );
+        apply_checks(&mut detail, Vec::new());
+        assert!(detail.checks.is_empty());
+    }
+
+    #[test]
+    fn a_dropped_check_leaves_the_timeline() {
+        let mut detail = sample();
+        apply_checks(
+            &mut detail,
+            vec![fixtures::snapshot_check(CheckStatus::Failed, 62)],
+        );
+        apply_checks(&mut detail, Vec::new());
+        assert_eq!(check_items(&detail), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_failing_check_joins_the_timeline_once() {
+        let mut detail = sample();
+        let failed = fixtures::snapshot_check(CheckStatus::Failed, 62);
+        apply_checks(&mut detail, vec![failed.clone()]);
+        apply_checks(&mut detail, vec![failed.clone()]);
+        assert_eq!(check_items(&detail), vec![failed.id]);
+    }
+
+    #[test]
+    fn cached_checks_stay_until_fresh_ones_land() {
+        let mut current = sample();
+        apply_checks(
+            &mut current,
+            vec![fixtures::snapshot_check(CheckStatus::Failed, 62)],
+        );
+        let mut fresh = sample();
+        apply_checks(&mut fresh, Vec::new());
+        keep_checks_until_fresh(&mut fresh, &current);
+        assert_eq!(check_items(&fresh), check_items(&current));
+    }
+
+    #[test]
+    fn a_fetched_log_lands_on_the_failed_step() {
+        let mut detail = sample();
+        let failed = fixtures::snapshot_check(CheckStatus::Failed, 62);
+        let mut polled = failed.clone();
+        for step in &mut polled.steps {
+            step.log.clear();
+        }
+        apply_checks(&mut detail, Vec::new());
+        apply_checks(&mut detail, vec![polled]);
+        let lines = failed
+            .steps
+            .iter()
+            .flat_map(|step| step.log.clone())
+            .collect();
+        put_check_log(&mut detail, &failed.id, lines);
+        assert_eq!(failed_step_log(&detail.checks[0]), failed_step_log(&failed));
+    }
+
+    #[test]
+    fn a_fetched_log_survives_a_poll() {
+        let mut detail = sample();
+        let failed = fixtures::snapshot_check(CheckStatus::Failed, 62);
+        let mut polled = failed.clone();
+        for step in &mut polled.steps {
+            step.log.clear();
+        }
+        apply_checks(&mut detail, vec![failed.clone()]);
+        apply_checks(&mut detail, vec![polled]);
+        assert_eq!(failed_step_log(&detail.checks[0]), failed_step_log(&failed));
     }
 }
