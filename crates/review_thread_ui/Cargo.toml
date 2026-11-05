@@ -25,9 +25,11 @@ submit_review_ui.workspace = true
 syntax_ui.workspace = true
 theme_ui.workspace = true
 widgets_ui.workspace = true
+serde.workspace = true
 
 [dev-dependencies]
 fixtures.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

@@ -10,6 +10,7 @@ mod inspector;
 mod menus;
 mod merge;
 mod outline;
+mod panes;
 mod quote;
 mod review_actions;
 mod rows;
