@@ -413,7 +413,9 @@ impl Workspace {
                 ReviewThreadEvent::ViewChanged => {}
             },
         );
-        self.route_subscription = Some(subscription);
+        // The title bar draws from the focused pane, so a change in the panes redraws it.
+        let redraw = cx.observe(&review, |_, _, cx| cx.notify());
+        self.route_subscription = Some(Subscription::join(subscription, redraw));
         window.focus(&review.focus_handle(cx), cx);
         self.route = Route::Review(review);
         cx.notify();

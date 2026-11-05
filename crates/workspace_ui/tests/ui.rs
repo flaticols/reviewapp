@@ -108,6 +108,24 @@ fn ctrl_b_percent_splits_the_open_review(cx: &mut TestAppContext) {
     assert_eq!(panes, Some(2));
 }
 
+/// The title bar's sidebar button follows the focused pane, so the window redraws when
+/// a pane changes.
+#[gpui_kit::test]
+fn hiding_a_panes_tree_redraws_the_title_bar(cx: &mut TestAppContext) {
+    let (_, workspace) = open_featured(cx);
+    let redraws = std::rc::Rc::new(std::cell::Cell::new(0));
+    let _watch = cx.update(|cx| {
+        let redraws = redraws.clone();
+        cx.observe(&workspace, move |_, _| redraws.set(redraws.get() + 1))
+    });
+    let pane = cx
+        .update(|cx| workspace.read(cx).review_view(cx))
+        .expect("review open");
+    pane.update(cx, |pane, cx| pane.toggle_outline(cx));
+    cx.run_until_parked();
+    assert!(redraws.get() > 0);
+}
+
 #[gpui_kit::test]
 fn viewed_checkbox_marks_the_file(cx: &mut TestAppContext) {
     let (window, _) = open_featured(cx);
