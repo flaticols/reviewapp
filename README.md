@@ -4,6 +4,11 @@ A macOS desktop app for reviewing GitHub pull requests from local clones, with a
 reviewing over the Agent Client Protocol (ACP). Built with [gpui-kit](https://gpui-kit.com)
 from the Sketch design "Switchfold Review".
 
+## Requirements
+
+macOS 13+, Rust (stable), the GitHub CLI signed in (`gh auth login`), Xcode (for `actool`)
+and [Nushell](https://www.nushell.sh) for bundling.
+
 ## Run
 
 ```
@@ -13,8 +18,11 @@ cargo run -p app_ui -- flaticols/switchfold#482   # open a pull request at launc
 cargo run -p app_ui -- --appearance dark          # override light/dark for this run
 ```
 
-Build the app bundle (release build, the Icon Composer icon compiled with `actool`,
-ad-hoc signed) with Nushell; `--install` also puts it in /Applications:
+## Build the .app and install it
+
+Builds a release binary, compiles the icon with `actool` and signs the bundle ad hoc.
+Without `--install` the app lands in `target/release/Switchfold Review.app`; with it, the app
+is also copied to `/Applications`, replacing an earlier copy:
 
 ```
 nu scripts/bundle.nu --install   # → /Applications/Switchfold Review.app (dev.switchfold.review)
