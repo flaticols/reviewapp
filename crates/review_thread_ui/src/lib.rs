@@ -71,9 +71,18 @@ impl Default for ReviewLayout {
 impl gpui_kit::Global for ReviewLayout {}
 
 impl ReviewLayout {
-    /// The current layout.
+    /// The current layout; until it first changes, the right sidebar is shown as the
+    /// reviewer last left it.
     pub fn get(cx: &App) -> Self {
-        cx.try_global::<Self>().copied().unwrap_or_default()
+        cx.try_global::<Self>().copied().unwrap_or_else(|| Self {
+            inspector: !cx
+                .stores()
+                .settings()
+                .read(cx)
+                .preferences()
+                .inspector_collapsed,
+            ..Self::default()
+        })
     }
 
     /// Whether focus mode hid the sidebars.
@@ -82,7 +91,9 @@ impl ReviewLayout {
     }
 
     fn update(cx: &mut App, change: impl FnOnce(&mut Self)) {
-        change(cx.default_global::<Self>());
+        let mut layout = Self::get(cx);
+        change(&mut layout);
+        cx.set_global(layout);
         cx.refresh_windows();
     }
 
@@ -94,11 +105,15 @@ impl ReviewLayout {
         });
     }
 
-    /// Shows or hides the reviewers and checks sidebar.
+    /// Shows or hides the reviewers and checks sidebar, and remembers the choice.
     pub fn toggle_inspector(cx: &mut App) {
         Self::update(cx, |layout| {
             layout.inspector = !layout.inspector;
             layout.before_focus = None;
+        });
+        let collapsed = !Self::get(cx).inspector;
+        cx.stores().settings().clone().update(cx, |settings, cx| {
+            settings.update_preferences(cx, |p| p.inspector_collapsed = collapsed)
         });
     }
 
@@ -933,7 +948,10 @@ impl ReviewThreadView {
             .then(|| self.render_inspector_panel(cx))
             .flatten();
         match inspector {
-            Some(inspector) => with_inspector(pane, inspector, window, cx),
+            Some(inspector) => {
+                let rail = self.render_check_rail(cx);
+                with_inspector(pane, inspector, rail, window, cx)
+            }
             None => pane,
         }
     }
@@ -987,23 +1005,32 @@ impl ReviewThreadView {
     }
 }
 
-/// `pane` with the inspector on its right, sized and shown as the review layout says.
+/// `pane` with the inspector on its right, sized and shown as the review layout says;
+/// `rail` stands in for the inspector while it is hidden.
 pub(crate) fn with_inspector(
     pane: gpui_kit::AnyElement,
     inspector: gpui_kit::AnyElement,
+    rail: Option<gpui_kit::AnyElement>,
     window: &Window,
     cx: &App,
 ) -> gpui_kit::AnyElement {
     let rem = window.rem_size();
-    h_resizable("review-inspector")
-        .child(resizable_panel().child(pane))
+    h_flex()
+        .size_full()
         .child(
-            resizable_panel()
-                .visible(ReviewLayout::get(cx).inspector)
-                .size(rem * 20.)
-                .size_range(px(240.)..px(480.))
-                .child(inspector),
+            div().flex_1().min_w_0().h_full().child(
+                h_resizable("review-inspector")
+                    .child(resizable_panel().child(pane))
+                    .child(
+                        resizable_panel()
+                            .visible(ReviewLayout::get(cx).inspector)
+                            .size(rem * 20.)
+                            .size_range(px(240.)..px(480.))
+                            .child(inspector),
+                    ),
+            ),
         )
+        .children(rail)
         .into_any_element()
 }
 
