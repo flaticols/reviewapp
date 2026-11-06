@@ -1,4 +1,5 @@
 use app_state_ui::StoresExt as _;
+use app_state_ui::actions::ToggleInspector;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     ActiveTheme as _, Icon, Sizable as _,
@@ -20,7 +21,67 @@ use widgets_ui::{CheckIcon, PullRequestStateIcon, SectionHeader};
 use crate::ReviewThreadView;
 use crate::cards::actor_avatar;
 
+/// A small button that hides or shows the inspector, like the one in the title bar.
+fn inspector_toggle(id: &'static str, tooltip: &'static str) -> Button {
+    Button::new(id)
+        .ghost()
+        .xsmall()
+        .icon(IconName::PanelRight)
+        .tooltip_with_action(tooltip, &ToggleInspector, None)
+        .on_click(|_, window, cx| window.dispatch_action(Box::new(ToggleInspector), cx))
+}
+
 impl ReviewThreadView {
+    /// A narrow column of check icons that stands in for the hidden inspector; each icon
+    /// opens its check's log. `None` while the inspector shows, in focus mode, or before
+    /// the review data has loaded.
+    pub(crate) fn render_check_rail(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let layout = crate::ReviewLayout::get(cx);
+        if layout.inspector || layout.is_focused() {
+            return None;
+        }
+        let detail = self.detail.as_ref()?;
+        let icons = detail.checks.iter().map(|check| {
+            let key = self.key.clone();
+            let id = check.id.clone();
+            let name = SharedString::from(check.name.clone());
+            div()
+                .id(SharedString::from(format!(
+                    "inspector-check-icon-{}",
+                    check.id
+                )))
+                .aria_label(SharedString::from(format!("{} log", check.name)))
+                .test_support()
+                .p_0p5()
+                .rounded(cx.theme().radius)
+                .cursor_pointer()
+                .hover(|this| this.bg(cx.theme().list_hover))
+                .tooltip(move |window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(name.clone()).build(window, cx)
+                })
+                .on_click(move |_, window, cx| {
+                    check_log_ui::open(key.clone(), id.clone(), window, cx)
+                })
+                .child(CheckIcon::new(check.status))
+        });
+        Some(
+            v_flex()
+                .id("check-rail")
+                .flex_none()
+                .h_full()
+                .py_2()
+                .px_1()
+                .gap_0p5()
+                .items_center()
+                .overflow_y_scroll()
+                .border_l_1()
+                .border_color(cx.theme().border)
+                .child(inspector_toggle("expand-inspector", "Show the right sidebar"))
+                .children(icons)
+                .into_any_element(),
+        )
+    }
+
     pub(crate) fn render_inspector(
         &self,
         detail: &PullRequestDetail,
@@ -151,7 +212,10 @@ impl ReviewThreadView {
             .child(
                 v_flex()
                     .gap_0p5()
-                    .child(SectionHeader::new("Reviewers"))
+                    .child(SectionHeader::new("Reviewers").action(inspector_toggle(
+                        "collapse-inspector",
+                        "Hide the right sidebar",
+                    )))
                     .children(reviewers),
             )
             .child(

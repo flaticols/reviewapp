@@ -257,6 +257,63 @@ fn a_check_opens_its_log_and_escape_closes_only_the_sheet(cx: &mut TestAppContex
 }
 
 #[gpui_kit::test]
+fn hiding_the_inspector_is_remembered_and_leaves_check_icons(cx: &mut TestAppContext) {
+    use app_state_ui::StoresExt as _;
+    use gpui_kit::component::WindowExt as _;
+    let (window, _) = open_featured(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("collapse-inspector", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let collapsed = cx.update(|cx| {
+        cx.stores()
+            .settings()
+            .read(cx)
+            .preferences()
+            .inspector_collapsed
+    });
+    assert!(collapsed, "hiding the inspector is remembered");
+    let icon = format!("inspector-check-icon-{}", fixtures::SNAPSHOT_CHECK_ID);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(gpui_kit::SharedString::from(icon), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        assert!(
+            window.has_active_sheet(cx),
+            "a folded check's icon opens its log"
+        );
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn the_check_rail_brings_the_inspector_back(cx: &mut TestAppContext) {
+    use app_state_ui::StoresExt as _;
+    let (window, _) = open_featured(cx);
+    for button in ["collapse-inspector", "expand-inspector"] {
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.click(button, cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+    }
+    let collapsed = cx.update(|cx| {
+        cx.stores()
+            .settings()
+            .read(cx)
+            .preferences()
+            .inspector_collapsed
+    });
+    assert!(!collapsed, "the rail's button shows the inspector again");
+}
+
+#[gpui_kit::test]
 fn clicking_a_line_number_starts_a_pending_thread(cx: &mut TestAppContext) {
     use gpui_kit::component::WindowExt as _;
     let (window, _) = open_featured(cx);

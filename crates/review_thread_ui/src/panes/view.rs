@@ -398,11 +398,11 @@ impl Render for ReviewPanes {
             let tree = self.tree.clone();
             self.render_node(&tree, 0, tree.count() > 1, cx)
         };
-        let inspector = self
-            .focused_view()
-            .update(cx, |pane, cx| pane.render_inspector_panel(cx));
+        let (inspector, rail) = self.focused_view().update(cx, |pane, cx| {
+            (pane.render_inspector_panel(cx), pane.render_check_rail(cx))
+        });
         let content = match inspector {
-            Some(inspector) => crate::with_inspector(body, inspector, window, cx),
+            Some(inspector) => crate::with_inspector(body, inspector, rail, window, cx),
             None => body,
         };
         div()

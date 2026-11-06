@@ -422,6 +422,8 @@ pub struct Preferences {
     pub repository_colors: Vec<(String, RepositoryColor)>,
     /// Sidebar sections the reviewer folded, by name.
     pub folded_sections: Vec<String>,
+    /// The review's right sidebar is hidden, leaving a strip of check icons.
+    pub inspector_collapsed: bool,
     /// Lists repositories in the sidebar under their organization or owner.
     pub group_repositories_by_owner: bool,
 }
@@ -575,6 +577,7 @@ impl Default for Preferences {
             repository_colors: Vec::new(),
             folded_sections: Vec::new(),
             group_repositories_by_owner: false,
+            inspector_collapsed: false,
         }
     }
 }
