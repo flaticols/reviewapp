@@ -586,6 +586,11 @@ impl Render for ReviewPanes {
             .on_action(cx.listener(|this, action: &CheckOut, window, cx| {
                 this.forward(action, window, cx)
             }))
+            .on_action(cx.listener(
+                |this, action: &app_state_ui::actions::FindInPane, window, cx| {
+                    this.forward(action, window, cx)
+                },
+            ))
             .child(content)
     }
 }

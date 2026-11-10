@@ -161,12 +161,16 @@ impl ReviewThreadView {
             .zip(rows[prefix..].iter().rev())
             .take_while(|(a, b)| a == b)
             .count();
-        if prefix != old.len() || old.len() != rows.len() {
+        let changed = prefix != old.len() || old.len() != rows.len();
+        if changed {
             self.list_state
                 .splice(prefix..old.len() - suffix, rows.len() - prefix - suffix);
         }
         self.items = items.into();
-        self.rows = rows.into();
+        // Kept when nothing changed, so find can tell it needn't search again.
+        if changed {
+            self.rows = rows.into();
+        }
     }
 
     /// The row of `path`'s header, after [`Self::sync_rows`].

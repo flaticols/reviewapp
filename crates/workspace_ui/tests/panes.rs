@@ -328,7 +328,6 @@ fn clicking_a_pane_then_the_tree_moves_that_pane(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-#[ignore = "needs find bar, Task 4"]
 fn after_a_tree_click_cmd_f_reaches_the_pane(cx: &mut TestAppContext) {
     let (window, _) = open_panes(cx);
     click(window, &tree_row(RENDER), cx);

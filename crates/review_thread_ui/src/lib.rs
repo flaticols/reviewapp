@@ -6,6 +6,7 @@
 mod cards;
 mod commits;
 mod filters;
+mod find;
 mod inspector;
 mod menus;
 mod merge;
@@ -149,6 +150,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-shift-a", ReviewWithAgent, Some(CONTEXT)),
         KeyBinding::new("cmd-shift-c", CheckOut, Some(CONTEXT)),
         KeyBinding::new("cmd-enter", SubmitComment, Some(CONTEXT)),
+        KeyBinding::new("cmd-f", app_state_ui::actions::FindInPane, Some(CONTEXT)),
     ]);
     use app_state_ui::actions::{
         ClosePane, FocusNextPane, FocusPaneDown, FocusPaneLeft, FocusPaneRight, FocusPaneUp,
@@ -172,6 +174,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-shift-a", ReviewWithAgent, panes),
         KeyBinding::new("cmd-shift-c", CheckOut, panes),
         KeyBinding::new("cmd-enter", SubmitComment, panes),
+        KeyBinding::new("cmd-f", app_state_ui::actions::FindInPane, panes),
         // Not while typing: on macOS ⌥⇧A types "Å".
         KeyBinding::new(
             "alt-shift-a",
@@ -248,6 +251,8 @@ pub struct ReviewThreadView {
     with_inspector: bool,
     /// Where to scroll once the review data has loaded.
     pending_scroll: Option<ScrollAnchor>,
+    /// The find bar, while open.
+    find: Option<find::FindState>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -362,6 +367,7 @@ impl ReviewThreadView {
             diffs_locally,
             with_inspector: true,
             pending_scroll: Some(state.scroll),
+            find: None,
             _subscriptions: subscriptions,
         };
         view.sync_detail(window, cx);
@@ -942,11 +948,14 @@ impl ReviewThreadView {
                 None => self.render_loading(cx).into_any_element(),
             };
         };
+        let timeline = self.render_timeline(window, cx).into_any_element();
+        self.refresh_find(cx);
         v_flex()
             .size_full()
             .min_w_0()
             .child(self.render_toolbar(&detail, cx))
-            .child(self.render_timeline(window, cx))
+            .children(self.render_find_bar(cx))
+            .child(timeline)
             .into_any_element()
     }
 
@@ -1039,6 +1048,10 @@ impl Render for ReviewThreadView {
             .size_full()
             .bg(cx.theme().background)
             .on_action(cx.listener(|this, _: &GoBack, window, cx| {
+                if this.find_has_focus(window, cx) {
+                    this.close_find(window, cx);
+                    return;
+                }
                 // Escape inside the composer or a reply field must not close the review
                 // and lose the draft; it leaves the field instead.
                 if window.has_focused_input(cx) {
@@ -1060,6 +1073,9 @@ impl Render for ReviewThreadView {
                 this.open_agent_review(window, cx)
             }))
             .on_action(cx.listener(|this, _: &CheckOut, window, cx| this.check_out(window, cx)))
+            .on_action(cx.listener(|this, _: &app_state_ui::actions::FindInPane, window, cx| {
+                this.open_find(window, cx)
+            }))
             .child(self.render_body(window, cx))
     }
 }

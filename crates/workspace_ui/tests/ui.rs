@@ -308,6 +308,115 @@ fn alt_shift_a_types_in_the_composer(cx: &mut TestAppContext) {
     .unwrap();
 }
 
+/// Opens find in the focused pane and searches for `query`.
+fn find_text(window: AnyWindowHandle, query: &str, cx: &mut TestAppContext) {
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.press("cmd-f", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let query = query.to_string();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.input(&query, cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+}
+
+fn press_and_render(window: AnyWindowHandle, key: &str, cx: &mut TestAppContext) {
+    let key = key.to_string();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.press(&key, cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+}
+
+/// The find bar's count, as painted.
+fn find_count(window: AnyWindowHandle, cx: &mut TestAppContext) -> String {
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window
+            .find("find-count")
+            .label()
+            .unwrap_or_default()
+            .to_string()
+    })
+    .unwrap()
+}
+
+#[gpui_kit::test]
+fn cmd_f_counts_and_steps_through_matches(cx: &mut TestAppContext) {
+    let (window, _) = open_featured(cx);
+    find_text(window, "fn ", cx);
+    press_and_render(window, "enter", cx);
+    let count = find_count(window, cx);
+    assert!(count.starts_with("2 of "), "Enter steps to the second match: {count}");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let current = window.find("find-match-current");
+        assert!(current.visible(), "the current match is on screen: {:?}", current.bounds());
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn shift_enter_wraps_to_the_last_match(cx: &mut TestAppContext) {
+    let (window, _) = open_featured(cx);
+    find_text(window, "fn ", cx);
+    press_and_render(window, "shift-enter", cx);
+    let count = find_count(window, cx);
+    let total = count.rsplit(' ').next().unwrap_or_default().to_string();
+    assert_eq!(count, format!("{total} of {total}"), "⇧Enter from the first wraps to the last");
+}
+
+#[gpui_kit::test]
+fn escape_closes_find_and_keeps_the_review(cx: &mut TestAppContext) {
+    let (window, workspace) = open_featured(cx);
+    find_text(window, "fn ", cx);
+    press_and_render(window, "escape", cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(!on_screen(window, "find-bar"), "Escape closes find");
+    })
+    .unwrap();
+    assert_eq!(
+        cx.update(|cx| workspace.read(cx).reviewing(cx)),
+        Some(featured()),
+        "the review stays open"
+    );
+}
+
+#[gpui_kit::test]
+fn switching_tabs_reruns_find(cx: &mut TestAppContext) {
+    let (window, _) = open_featured(cx);
+    find_text(window, "hunk hash", cx);
+    let everything = find_count(window, cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(("timeline-filter", 2usize), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let changes = find_count(window, cx);
+    assert_ne!(everything, changes, "Changes drops the description's match");
+}
+
+#[gpui_kit::test]
+fn find_matches_comment_text(cx: &mut TestAppContext) {
+    let (window, _) = open_featured(cx);
+    find_text(window, "pick up its thread", cx);
+    assert_eq!(find_count(window, cx), "1 of 1");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("find-match-current").visible(), "the comment is outlined");
+    })
+    .unwrap();
+}
+
 #[gpui_kit::test]
 fn a_check_opens_its_log_and_escape_closes_only_the_sheet(cx: &mut TestAppContext) {
     use gpui_kit::component::WindowExt as _;

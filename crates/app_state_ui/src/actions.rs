@@ -69,5 +69,7 @@ gpui_kit::actions!(
         ClosePane,
         /// Lists the review's files to jump the focused pane to one.
         GoToFile,
+        /// Finds text in the focused review pane.
+        FindInPane,
     ]
 );

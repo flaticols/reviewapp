@@ -7,6 +7,7 @@
 mod layout;
 mod selectable_code;
 
+use std::ops::Range;
 use std::rc::Rc;
 
 use diff_model::{DiffLine, FileDiff, LineKind};
@@ -21,7 +22,7 @@ use gpui_kit::component::{
     v_flex,
 };
 use gpui_kit::{
-    AnyElement, App, ClickEvent, ClipboardItem, ElementId, FontWeight, Hsla,
+    AnyElement, App, ClickEvent, ClipboardItem, ElementId, FontWeight, HighlightStyle, Hsla,
     InteractiveElement as _, IntoElement, ParentElement as _, RenderOnce, SharedString,
     StatefulInteractiveElement as _, Styled as _, TestSupportExt as _, Window, div,
     prelude::FluentBuilder as _, rems,
@@ -193,6 +194,42 @@ pub struct FileDiffRow {
     menu: Option<MenuBuilder>,
     line_menu: Option<LineMenuBuilder>,
     document_order: u64,
+    find: Option<Find>,
+}
+
+/// Text to mark in a row's code lines, and the match find is on, if it is in this row.
+#[derive(Clone)]
+struct Find {
+    query: SharedString,
+    /// The hunk line index and byte range of the current match.
+    current: Option<(usize, Range<usize>)>,
+}
+
+/// Where `query` occurs in `text`, ignoring case, as byte ranges that don't overlap.
+pub fn find_ranges(text: &str, query: &str) -> Vec<Range<usize>> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let query: Vec<char> = query.chars().flat_map(char::to_lowercase).collect();
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let mut ranges = Vec::new();
+    let mut ix = 0;
+    while ix + query.len() <= chars.len() {
+        let hit = chars[ix..ix + query.len()]
+            .iter()
+            .zip(&query)
+            .all(|((_, c), q)| c.to_lowercase().eq(std::iter::once(*q)));
+        if hit {
+            let end = chars
+                .get(ix + query.len())
+                .map_or(text.len(), |(byte, _)| *byte);
+            ranges.push(chars[ix].0..end);
+            ix += query.len();
+        } else {
+            ix += 1;
+        }
+    }
+    ranges
 }
 
 impl FileDiffRow {
@@ -213,7 +250,22 @@ impl FileDiffRow {
             menu: None,
             line_menu: None,
             document_order: 0,
+            find: None,
         }
+    }
+
+    /// Marks `query` in the row's code; `current` is the hunk line and range of the
+    /// match find is on, when it is in this row.
+    pub fn find(
+        mut self,
+        query: impl Into<SharedString>,
+        current: Option<(usize, Range<usize>)>,
+    ) -> Self {
+        self.find = Some(Find {
+            query: query.into(),
+            current,
+        });
+        self
     }
 
     /// Builds the file's menu, shown from the header's ⋯ button and on right-click.
@@ -419,6 +471,34 @@ impl FileDiffRow {
         }
     }
 
+    /// The syntax colors of hunk line `line`, with find's matches marked over them.
+    fn spans(&self, hunk: usize, line: usize, cx: &App) -> Vec<(Range<usize>, HighlightStyle)> {
+        let syntax = self.highlights.line(hunk, line);
+        let Some(find) = &self.find else {
+            return syntax.to_vec();
+        };
+        let text = &self.file.hunks[hunk].lines[line].text;
+        let warning = cx.theme().warning;
+        let marks = find_ranges(text, &find.query).into_iter().map(|range| {
+            let current = find.current.as_ref() == Some(&(line, range.clone()));
+            let alpha = if current { 0.7 } else { 0.3 };
+            let style = HighlightStyle {
+                background_color: Some(warning.opacity(alpha)),
+                ..HighlightStyle::default()
+            };
+            (range, style)
+        });
+        gpui_kit::combine_highlights(syntax.iter().cloned(), marks).collect()
+    }
+
+    /// Whether the current find match is on hunk line `line`.
+    fn has_current(&self, line: usize) -> bool {
+        self.find
+            .as_ref()
+            .and_then(|find| find.current.as_ref())
+            .is_some_and(|(current, _)| *current == line)
+    }
+
     fn row_id(&self, kind: &str) -> ElementId {
         let ix = match self.row {
             DiffRow::Hunk(hunk) => hunk << 20,
@@ -451,15 +531,17 @@ impl RenderOnce for FileDiffRow {
             DiffRow::Hunk(hunk) => hunk_header(&file.hunks[hunk].header(), cx).into_any_element(),
             DiffRow::Line { hunk, line } => unified_line(
                 &file.hunks[hunk].lines[line],
-                self.highlights.line(hunk, line),
+                &self.spans(hunk, line, cx),
                 self.line_actions(DiffSide::Head),
                 cx,
             )
             .into_any_element(),
             DiffRow::Split { hunk, left, right } => {
                 let lines = &file.hunks[hunk].lines;
-                let left = left.map(|ix| (&lines[ix], self.highlights.line(hunk, ix)));
-                let right = right.map(|ix| (&lines[ix], self.highlights.line(hunk, ix)));
+                let left = left.map(|ix| (&lines[ix], self.spans(hunk, ix, cx)));
+                let right = right.map(|ix| (&lines[ix], self.spans(hunk, ix, cx)));
+                let left = left.as_ref().map(|(line, spans)| (*line, spans.as_slice()));
+                let right = right.as_ref().map(|(line, spans)| (*line, spans.as_slice()));
                 h_flex()
                     .items_stretch()
                     .child(split_side(left, self.line_actions(DiffSide::Base), cx))
@@ -470,6 +552,23 @@ impl RenderOnce for FileDiffRow {
             DiffRow::Threads(_) => {
                 thread_slot(std::mem::take(&mut self.threads)).into_any_element()
             }
+        };
+        let current = match self.row {
+            DiffRow::Line { line, .. } => self.has_current(line),
+            DiffRow::Split { left, right, .. } => {
+                left.is_some_and(|ix| self.has_current(ix))
+                    || right.is_some_and(|ix| self.has_current(ix))
+            }
+            _ => false,
+        };
+        let body = if current {
+            div()
+                .id("find-match-current")
+                .test_support()
+                .child(body)
+                .into_any_element()
+        } else {
+            body
         };
         let id = match self.row {
             DiffRow::Header => ElementId::Name(SharedString::from(format!("file-{}", file.path))),
@@ -833,6 +932,21 @@ fn thread_slot(threads: Vec<AnyElement>) -> impl IntoElement {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn find_ranges_ignores_case() {
+        assert_eq!(find_ranges("Foo foo", "FOO"), vec![0..3, 4..7]);
+    }
+
+    #[test]
+    fn find_ranges_empty_query_is_empty() {
+        assert!(find_ranges("foo", "").is_empty());
+    }
+
+    #[test]
+    fn find_ranges_keep_multibyte_boundaries() {
+        assert_eq!(find_ranges("é é", "É"), vec![0..2, 3..5]);
+    }
 
     #[test]
     fn tabs_expand_to_stops_and_spans_follow() {
