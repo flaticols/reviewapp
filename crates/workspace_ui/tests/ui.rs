@@ -248,14 +248,14 @@ fn pane_files(workspace: &Entity<Workspace>, cx: &mut TestAppContext) -> Vec<Opt
 }
 
 #[gpui_kit::test]
-fn alt_shift_a_jumps_the_focused_pane_to_a_fuzzy_match(cx: &mut TestAppContext) {
+fn alt_shift_o_jumps_the_focused_pane_to_a_fuzzy_match(cx: &mut TestAppContext) {
     let (window, workspace) = open_featured(cx);
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
         window.press("ctrl-b", cx);
         window.press("%", cx);
         window.render_frame(cx);
-        window.press("alt-shift-a", cx);
+        window.press("alt-shift-o", cx);
     })
     .unwrap();
     settle(window, "go-to-file", cx);
@@ -289,7 +289,7 @@ fn alt_shift_a_jumps_the_focused_pane_to_a_fuzzy_match(cx: &mut TestAppContext) 
 }
 
 #[gpui_kit::test]
-fn alt_shift_a_types_in_the_composer(cx: &mut TestAppContext) {
+fn alt_shift_o_types_in_the_composer(cx: &mut TestAppContext) {
     let (window, _) = open_featured(cx);
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
@@ -298,7 +298,7 @@ fn alt_shift_a_types_in_the_composer(cx: &mut TestAppContext) {
     .unwrap();
     cx.run_until_parked();
     cx.update_window(window, |_, window, cx| {
-        window.press("alt-shift-a", cx);
+        window.press("alt-shift-o", cx);
         window.render_frame(cx);
         assert!(
             window.try_find("go-to-file").is_none(),

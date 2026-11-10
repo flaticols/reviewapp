@@ -175,9 +175,9 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-shift-c", CheckOut, panes),
         KeyBinding::new("cmd-enter", SubmitComment, panes),
         KeyBinding::new("cmd-f", app_state_ui::actions::FindInPane, panes),
-        // Not while typing: on macOS ⌥⇧A types "Å".
+        // Not while typing: on macOS ⌥⇧O types "Ø".
         KeyBinding::new(
-            "alt-shift-a",
+            "alt-shift-o",
             app_state_ui::actions::GoToFile,
             Some("ReviewPanes && !Input"),
         ),

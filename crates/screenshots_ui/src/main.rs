@@ -356,7 +356,7 @@ fn render(
         Scene::GoToFile => {
             use gpui_kit::test::TestWindowExt as _;
             window.render_frame(cx);
-            window.press("alt-shift-a", cx);
+            window.press("alt-shift-o", cx);
             window.render_frame(cx);
             window.input("rndr", cx);
         }

@@ -3,7 +3,7 @@
 When you split a review, every pane gets its own copy of the file tree. Two panes show
 two identical trees, which wastes space and does nothing for navigation. The review
 should have one file tree on the left. Clicking a file should scroll whichever pane you
-last worked in. Two keyboard shortcuts come with it: ⌥⇧A opens a fuzzy go-to-file list,
+last worked in. Two keyboard shortcuts come with it: ⌥⇧O opens a fuzzy go-to-file list,
 and ⌘F finds text in the focused pane.
 
 Assumption: every pane in a review shows the same pull request. `ReviewPanes` already
@@ -32,7 +32,7 @@ The right sidebar is already shared and follows the focused pane. It does not ch
   the file, the pane switches to Changes first, as it does now.
 - If the pane shows a single commit that doesn't touch the file, the pane switches back
   to all commits and then jumps, as `comment_on_line` already does. The same applies to
-  Threads clicks and ⌥⇧A.
+  Threads clicks and ⌥⇧O.
 - Folder folding and the selection belong to the one tree. Switching panes does not
   reset them.
 - The tree's selection follows the file at the top of the focused pane. It updates as
@@ -42,7 +42,7 @@ The right sidebar is already shared and follows the focused pane. It does not ch
 - A click in the tree gives the tree keyboard focus, so arrow keys move the selection,
   and each move reveals the file in the focused pane.
 - While the tree has keyboard focus, Esc returns focus to the focused pane. The review
-  shortcuts (⌘F, ⌥⇧A, ⌘↵, ⌘⇧↵, ⌘⇧O, ⌘⇧A, ⌘⇧C) still reach the focused pane.
+  shortcuts (⌘F, ⌥⇧O, ⌘↵, ⌘⇧↵, ⌘⇧O, ⌘⇧A, ⌘⇧C) still reach the focused pane.
   `ReviewPanes` forwards them.
 - Right-clicking a file opens the same file menu as today.
 - ⌘B shows and hides the shared tree. Focus mode (⌘⇧F) hides and restores it. The
@@ -56,13 +56,13 @@ The right sidebar is already shared and follows the focused pane. It does not ch
   `hiding_one_panes_tree_*` in `crates/workspace_ui/tests/panes.rs` and
   `hiding_a_panes_tree_redraws_the_title_bar` in `crates/workspace_ui/tests/ui.rs`.
 
-## ⌥⇧A — Go to file
+## ⌥⇧O — Go to file
 
 - Opens a dialog listing only the pull request's changed files, in the same style as the
   ⌘K palette (`command_palette_ui`).
 - Confirming a file scrolls the focused pane to it, exactly like a tree click.
 - Only active on the review screen, and not while a text field has focus. On macOS
-  ⌥⇧A types "Å", and the composer and reply fields must still accept it.
+  ⌥⇧O types "Ø", and the composer and reply fields must still accept it.
 - Matching is fuzzy, in the GoLand style:
   - query characters must appear in order in the path, ignoring case;
   - `svcgo` finds `internal/services/ocn/service.go`;
