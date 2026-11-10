@@ -55,6 +55,8 @@ enum Scene {
     SplitPanes,
     /// Find in pane, on the second match of a query.
     FindInPane,
+    /// The thread with the right sidebar hidden to its strip of check icons.
+    InspectorHidden,
     Submit,
     StartAgent,
     CheckLog,
@@ -78,7 +80,7 @@ enum Scene {
 }
 
 impl Scene {
-    const ALL: [Scene; 33] = [
+    const ALL: [Scene; 34] = [
         Self::List,
         Self::OneCommit,
         Self::RowMenu,
@@ -97,6 +99,7 @@ impl Scene {
         Self::ThreadFirstFile,
         Self::SplitPanes,
         Self::FindInPane,
+        Self::InspectorHidden,
         Self::Submit,
         Self::StartAgent,
         Self::CheckLog,
@@ -134,6 +137,7 @@ impl Scene {
             Self::ThreadFirstFile => "02d-thread-first-file",
             Self::SplitPanes => "02m-split-panes",
             Self::FindInPane => "02n-find-in-pane",
+            Self::InspectorHidden => "02o-inspector-hidden",
             Self::Submit => "03-submit",
             Self::StartAgent => "05a-start-agent",
             Self::CheckLog => "04-check-log",
@@ -236,6 +240,12 @@ fn render(
                 settings.update_preferences(cx, |p| *p = saved)
             });
         }
+        if scene == Scene::InspectorHidden {
+            use app_state_ui::StoresExt as _;
+            cx.stores().settings().clone().update(cx, |settings, cx| {
+                settings.update_preferences(cx, |p| p.inspector_collapsed = true)
+            });
+        }
         if scene == Scene::ThreadEspresso {
             look.dark_theme = settings_model::DarkTheme::Espresso;
             look.light_theme = settings_model::LightTheme::IslandsLight;
@@ -301,6 +311,7 @@ fn render(
                 | Scene::SplitPanes
                 | Scene::GoToFile
                 | Scene::FindInPane
+                | Scene::InspectorHidden
                 | Scene::Submit
                 | Scene::StartAgent
                 | Scene::CheckLog

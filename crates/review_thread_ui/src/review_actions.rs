@@ -1,5 +1,5 @@
 use app_state_ui::StoresExt as _;
-use app_state_ui::actions::{SubmitReview, ToggleFocusMode, ToggleInspector};
+use app_state_ui::actions::{SubmitReview, ToggleFocusMode};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     ActiveTheme as _, Icon, Sizable as _, WindowExt as _,
@@ -59,7 +59,7 @@ fn plural(count: usize, one: &str, many: &str) -> String {
 }
 
 /// The review's actions for the title bar: the pending review's size with Discard,
-/// Approve, and Submit review.
+/// Approve, Submit review, and focus mode.
 #[derive(IntoElement)]
 pub struct ReviewActions {
     view: Entity<ReviewThreadView>,
@@ -126,63 +126,41 @@ impl RenderOnce for ReviewActions {
                     submit_view.update(cx, |this, cx| this.open_submit_review(None, window, cx))
                 }),
             )
-            .child(layout_buttons(cx))
+            .child(focus_button(cx))
     }
 }
 
-/// Show or hide the right sidebar, and focus mode, which hides both sidebars.
-fn layout_buttons(cx: &App) -> impl IntoElement + use<> {
+/// Focus mode, which hides both sidebars. On reads as full-strength ink, off as dimmed;
+/// neither gets a fill, as in Zed.
+fn focus_button(cx: &App) -> Button {
     let layout = crate::ReviewLayout::get(cx);
-    // On reads as full-strength ink, off as dimmed; neither gets a fill, as in Zed.
-    let toggle_icon = |icon: IconName, on: bool| {
-        Icon::new(icon).text_color(if on {
-            cx.theme().foreground
-        } else {
-            cx.theme().muted_foreground
-        })
-    };
-    h_flex()
-        .gap_0p5()
+    let focused = layout.is_focused();
+    Button::new("toggle-focus")
+        .ghost()
+        .small()
         .ml_1()
-        .child(
-            Button::new("toggle-inspector")
-                .ghost()
-                .small()
-                .icon(toggle_icon(IconName::PanelRight, layout.inspector))
-                .tooltip_with_action(
-                    if layout.inspector {
-                        "Hide the right sidebar"
-                    } else {
-                        "Show the right sidebar"
-                    },
-                    &ToggleInspector,
-                    None,
-                )
-                .on_click(|_, window, cx| window.dispatch_action(Box::new(ToggleInspector), cx)),
+        .icon(
+            Icon::new(if focused {
+                IconName::Minimize2
+            } else {
+                IconName::Maximize2
+            })
+            .text_color(if focused {
+                cx.theme().foreground
+            } else {
+                cx.theme().muted_foreground
+            }),
         )
-        .child(
-            Button::new("toggle-focus")
-                .ghost()
-                .small()
-                .icon(toggle_icon(
-                    if layout.is_focused() {
-                        IconName::Minimize2
-                    } else {
-                        IconName::Maximize2
-                    },
-                    layout.is_focused(),
-                ))
-                .tooltip_with_action(
-                    if layout.is_focused() {
-                        "Leave focus mode"
-                    } else {
-                        "Focus mode: hide both sidebars"
-                    },
-                    &ToggleFocusMode,
-                    None,
-                )
-                .on_click(|_, window, cx| window.dispatch_action(Box::new(ToggleFocusMode), cx)),
+        .tooltip_with_action(
+            if focused {
+                "Leave focus mode"
+            } else {
+                "Focus mode: hide both sidebars"
+            },
+            &ToggleFocusMode,
+            None,
         )
+        .on_click(|_, window, cx| window.dispatch_action(Box::new(ToggleFocusMode), cx))
 }
 
 /// A title bar button drawn as a 1 px `border` and `text` in color, with no fill, so

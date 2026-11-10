@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use app_state_ui::actions::ToggleSidebar;
+use app_state_ui::actions::{ToggleInspector, ToggleSidebar};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     ActiveTheme as _, Icon, Sizable as _, TitleBar,
@@ -34,13 +34,14 @@ pub fn window_options(cx: &App) -> WindowOptions {
 
 type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 
-/// The title bar: sidebar toggle, the current repository, the current screen's actions
-/// and the signed-in account.
+/// The title bar: sidebar toggle, the current repository, the current screen's actions,
+/// the signed-in account and, on screens with a right sidebar, its toggle.
 #[derive(IntoElement)]
 pub struct AppTitleBar {
     location: SharedString,
     show_sidebar_toggle: bool,
     sidebar_open: bool,
+    inspector_open: Option<bool>,
     show_account: bool,
     viewer_name: Option<SharedString>,
     title: Option<AnyElement>,
@@ -55,6 +56,7 @@ impl AppTitleBar {
             location: location.into(),
             show_sidebar_toggle: true,
             sidebar_open: false,
+            inspector_open: None,
             show_account: true,
             viewer_name: None,
             title: None,
@@ -78,6 +80,13 @@ impl AppTitleBar {
     /// Marks the sidebar toggle as on while the sidebar is showing.
     pub fn sidebar_open(mut self, open: bool) -> Self {
         self.sidebar_open = open;
+        self
+    }
+
+    /// Shows the right sidebar's toggle as the bar's last item, marked on while `open`.
+    /// Screens without a right sidebar leave it out.
+    pub fn inspector_open(mut self, open: bool) -> Self {
+        self.inspector_open = Some(open);
         self
     }
 
@@ -177,7 +186,31 @@ impl RenderOnce for AppTitleBar {
             .when_some(
                 self.viewer_name.filter(|_| self.show_account),
                 |this, name| this.child(InitialsAvatar::new(&name)),
-            );
+            )
+            .when_some(self.inspector_open, |this, open| {
+                this.child(
+                    Button::new("toggle-inspector")
+                        .ghost()
+                        .small()
+                        .icon(Icon::new(IconName::PanelRight).text_color(if open {
+                            cx.theme().foreground
+                        } else {
+                            cx.theme().muted_foreground
+                        }))
+                        .tooltip_with_action(
+                            if open {
+                                "Hide the right sidebar"
+                            } else {
+                                "Show the right sidebar"
+                            },
+                            &ToggleInspector,
+                            None,
+                        )
+                        .on_click(|_, window, cx| {
+                            window.dispatch_action(Box::new(ToggleInspector), cx)
+                        }),
+                )
+            });
 
         TitleBar::new()
             .h(theme_ui::TITLE_BAR_HEIGHT)

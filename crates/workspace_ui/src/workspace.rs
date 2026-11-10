@@ -499,8 +499,10 @@ impl Workspace {
             }
             Route::Review(panes) => {
                 let view = panes.read(cx).focused_view();
+                let layout = review_thread_ui::ReviewLayout::get(cx);
                 title_bar = title_bar
-                    .sidebar_open(review_thread_ui::ReviewLayout::get(cx).outline)
+                    .sidebar_open(layout.outline)
+                    .inspector_open(layout.inspector)
                     .title(review_thread_ui::PullRequestTitle::new(view.clone()))
                     .actions(review_thread_ui::ReviewActions::new(view))
             }

@@ -1,5 +1,4 @@
 use app_state_ui::StoresExt as _;
-use app_state_ui::actions::ToggleInspector;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     ActiveTheme as _, Icon, Sizable as _,
@@ -20,16 +19,6 @@ use widgets_ui::{CheckIcon, PullRequestStateIcon, SectionHeader};
 
 use crate::ReviewThreadView;
 use crate::cards::actor_avatar;
-
-/// A small button that hides or shows the inspector, like the one in the title bar.
-fn inspector_toggle(id: &'static str, tooltip: &'static str) -> Button {
-    Button::new(id)
-        .ghost()
-        .xsmall()
-        .icon(IconName::PanelRight)
-        .tooltip_with_action(tooltip, &ToggleInspector, None)
-        .on_click(|_, window, cx| window.dispatch_action(Box::new(ToggleInspector), cx))
-}
 
 impl ReviewThreadView {
     /// A narrow column of check icons that stands in for the hidden inspector; each icon
@@ -76,7 +65,6 @@ impl ReviewThreadView {
                 .overflow_y_scroll()
                 .border_l_1()
                 .border_color(cx.theme().border)
-                .child(inspector_toggle("expand-inspector", "Show the right sidebar"))
                 .children(icons)
                 .into_any_element(),
         )
@@ -212,10 +200,7 @@ impl ReviewThreadView {
             .child(
                 v_flex()
                     .gap_0p5()
-                    .child(SectionHeader::new("Reviewers").action(inspector_toggle(
-                        "collapse-inspector",
-                        "Hide the right sidebar",
-                    )))
+                    .child(SectionHeader::new("Reviewers"))
                     .children(reviewers),
             )
             .child(
