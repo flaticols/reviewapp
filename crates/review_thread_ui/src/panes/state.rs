@@ -30,3 +30,15 @@ pub struct ScrollAnchor {
     /// How far into that row the top edge is, in pixels.
     pub offset: f32,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_layout_saved_with_a_per_pane_tree_still_loads() {
+        let saved = r#"{"filter":"Changes","outline":false,"scroll":{"file":"a.rs","row":2,"offset":4.0}}"#;
+        let state: PaneState = serde_json::from_str(saved).expect("old layout loads");
+        assert_eq!(state.scroll.file.as_deref(), Some("a.rs"));
+    }
+}
