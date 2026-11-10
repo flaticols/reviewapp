@@ -162,6 +162,12 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-b o", FocusNextPane, panes),
         KeyBinding::new("ctrl-b z", ZoomPane, panes),
         KeyBinding::new("ctrl-b x", ClosePane, panes),
+        // Not while typing: on macOS ⌥⇧A types "Å".
+        KeyBinding::new(
+            "alt-shift-a",
+            app_state_ui::actions::GoToFile,
+            Some("ReviewPanes && !Input"),
+        ),
     ]);
 }
 

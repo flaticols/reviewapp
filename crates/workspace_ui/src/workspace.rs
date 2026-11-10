@@ -351,6 +351,29 @@ impl Workspace {
         }
     }
 
+    /// Lists the open review's files; the picked one scrolls the focused pane to it.
+    fn go_to_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(review) = self.review_view(cx) else {
+            return;
+        };
+        let paths = review
+            .read(cx)
+            .detail()
+            .map(|detail| detail.files.iter().map(|f| f.path.clone().into()).collect())
+            .unwrap_or_default();
+        let workspace = cx.entity();
+        command_palette_ui::open_files(
+            paths,
+            move |path, window, cx| {
+                workspace.update(cx, |this, cx| {
+                    this.confirm_palette(&format!("file:{path}"), window, cx)
+                })
+            },
+            window,
+            cx,
+        );
+    }
+
     /// The focused pane of the open review, if any.
     pub fn review_view(&self, cx: &App) -> Option<Entity<ReviewThreadView>> {
         self.review_panes()
@@ -571,6 +594,11 @@ impl Render for Workspace {
             .on_action(|_: &CloseWindow, window, _| window.remove_window())
             .on_action(
                 cx.listener(|this, _: &FocusSearch, window, cx| this.open_palette(window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &app_state_ui::actions::GoToFile, window, cx| {
+                    this.go_to_file(window, cx)
+                }),
             )
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
                 this.open_settings(SettingsPageKind::Accounts, window, cx)

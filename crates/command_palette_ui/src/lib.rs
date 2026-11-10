@@ -3,6 +3,7 @@
 
 mod fuzzy;
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui_kit::component::{
@@ -10,7 +11,8 @@ use gpui_kit::component::{
     command::{Command, CommandGroup, CommandItem, CommandState},
 };
 use gpui_kit::{
-    Action, App, AppContext as _, ParentElement as _, SharedString, Styled as _, Window,
+    Action, App, AppContext as _, InteractiveElement as _, ParentElement as _, SharedString,
+    Styled as _, TestSupportExt as _, Window, div,
 };
 
 pub use fuzzy::rank;
@@ -186,4 +188,65 @@ pub fn open(
                     .on_cancel(|window, cx| window.close_dialog(cx)),
             )
     });
+}
+
+/// Opens Go to file over the window: `paths` ranked by [`rank`] as the query changes.
+/// Confirming one closes it and calls `on_pick` with the path.
+pub fn open_files(
+    paths: Vec<SharedString>,
+    on_pick: impl Fn(SharedString, &mut Window, &mut App) + 'static,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let paths = Rc::new(paths);
+    let shown: Rc<RefCell<Vec<usize>>> = Rc::new(RefCell::new((0..paths.len()).collect()));
+    let state = cx.new(|cx| CommandState::new(window, cx));
+    let query = state.clone();
+    let on_pick: KeyHandler = Rc::new(on_pick);
+    let width = window.rem_size() * 40.;
+    let top = window.viewport_size().height / 6.;
+    window.open_dialog(cx, move |dialog, _, _| {
+        let items: Vec<CommandItem> = shown
+            .borrow()
+            .iter()
+            .map(|ix| {
+                CommandItem::new()
+                    .label(paths[*ix].clone())
+                    .icon(Icon::new(IconName::FileCode))
+            })
+            .collect();
+        let ranked = shown.clone();
+        let query_paths = paths.clone();
+        let picked = shown.clone();
+        let pick_paths = paths.clone();
+        let on_pick = on_pick.clone();
+        let command = Command::new(&state)
+            .placeholder("Go to file…")
+            .max_h(gpui_kit::rems(26.))
+            .filterable(false)
+            .group(CommandGroup::new().label("Files").items(items))
+            .on_query(move |query, window, _| {
+                *ranked.borrow_mut() = rank(query, &query_paths);
+                window.refresh();
+            })
+            .on_confirm(move |path: IndexPath, window, cx| {
+                let path = picked
+                    .borrow()
+                    .get(path.row)
+                    .map(|ix| pick_paths[*ix].clone());
+                window.close_dialog(cx);
+                if let Some(path) = path {
+                    on_pick(path, window, cx);
+                }
+            })
+            .on_cancel(|window, cx| window.close_dialog(cx));
+        dialog
+            .w(width)
+            .margin_top(top)
+            .close_button(false)
+            .p_0()
+            .child(div().id("go-to-file").test_support().child(command))
+    });
+    // The dialog takes focus as it opens; the query field needs it.
+    query.update(cx, |state, cx| state.focus(window, cx));
 }

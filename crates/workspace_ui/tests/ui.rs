@@ -227,6 +227,79 @@ fn escape_in_the_composer_keeps_the_review_and_its_draft(cx: &mut TestAppContext
     assert_eq!(cx.update(|cx| workspace.read(cx).reviewing(cx)), None);
 }
 
+/// Each pane's top file, first halves before second halves.
+fn pane_files(workspace: &Entity<Workspace>, cx: &mut TestAppContext) -> Vec<Option<String>> {
+    cx.update(|cx| {
+        let panes = workspace.read(cx).review_panes().expect("review open");
+        let panes = panes.read(cx).panes();
+        panes
+            .iter()
+            .map(|pane| pane.read(cx).pane_state().scroll.file)
+            .collect()
+    })
+}
+
+#[gpui_kit::test]
+fn alt_shift_a_jumps_the_focused_pane_to_a_fuzzy_match(cx: &mut TestAppContext) {
+    let (window, workspace) = open_featured(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.press("ctrl-b", cx);
+        window.press("%", cx);
+        window.render_frame(cx);
+        window.press("alt-shift-a", cx);
+    })
+    .unwrap();
+    settle(window, "go-to-file", cx);
+    let before = pane_files(&workspace, cx);
+    // The query reaches the list after this update ends, so Enter goes in the next one.
+    cx.update_window(window, |_, window, cx| window.input("rndr", cx))
+        .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.press("enter", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window.try_find("go-to-file").is_none(),
+            "picking a file closes go-to-file"
+        );
+    })
+    .unwrap();
+    assert_eq!(
+        pane_files(&workspace, cx),
+        vec![
+            before[0].clone(),
+            Some("crates/review/src/render.rs".into())
+        ],
+        "only the focused pane jumps"
+    );
+}
+
+#[gpui_kit::test]
+fn alt_shift_a_types_in_the_composer(cx: &mut TestAppContext) {
+    let (window, _) = open_featured(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("description-reply", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.press("alt-shift-a", cx);
+        window.render_frame(cx);
+        assert!(
+            window.try_find("go-to-file").is_none(),
+            "go-to-file stays shut while typing"
+        );
+    })
+    .unwrap();
+}
+
 #[gpui_kit::test]
 fn a_check_opens_its_log_and_escape_closes_only_the_sheet(cx: &mut TestAppContext) {
     use gpui_kit::component::WindowExt as _;

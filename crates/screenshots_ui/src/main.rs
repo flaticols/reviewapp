@@ -65,6 +65,8 @@ enum Scene {
     Appearance,
     Keyboard,
     Palette,
+    /// Go to file with a fuzzy query typed.
+    GoToFile,
     AgentRun,
     /// The Reviews tab during the mock agent's run.
     ReviewsTab,
@@ -74,7 +76,7 @@ enum Scene {
 }
 
 impl Scene {
-    const ALL: [Scene; 31] = [
+    const ALL: [Scene; 32] = [
         Self::List,
         Self::OneCommit,
         Self::RowMenu,
@@ -103,6 +105,7 @@ impl Scene {
         Self::Appearance,
         Self::Keyboard,
         Self::Palette,
+        Self::GoToFile,
         Self::AgentRun,
         Self::ReviewsTab,
         Self::LiveReview,
@@ -138,6 +141,7 @@ impl Scene {
             Self::Appearance => "07d-appearance",
             Self::Keyboard => "07e-keyboard",
             Self::Palette => "08-palette",
+            Self::GoToFile => "08b-go-to-file",
             Self::AgentRun => "05-agent-running",
             Self::ReviewsTab => "05b-reviews-tab",
             Self::LiveReview => "09-live-review",
@@ -291,6 +295,7 @@ fn render(
                 | Scene::Unresolved
                 | Scene::ThreadFirstFile
                 | Scene::SplitPanes
+                | Scene::GoToFile
                 | Scene::Submit
                 | Scene::StartAgent
                 | Scene::CheckLog
@@ -336,6 +341,13 @@ fn render(
             cx,
         ),
         Scene::Palette => window.dispatch_action(Box::new(app_state_ui::actions::FocusSearch), cx),
+        Scene::GoToFile => {
+            use gpui_kit::test::TestWindowExt as _;
+            window.render_frame(cx);
+            window.press("alt-shift-a", cx);
+            window.render_frame(cx);
+            window.input("rndr", cx);
+        }
         Scene::RowMenu => {
             use gpui_kit::test::TestWindowExt as _;
             window.render_frame(cx);
