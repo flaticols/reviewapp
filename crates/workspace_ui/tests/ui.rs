@@ -263,6 +263,10 @@ fn hiding_the_inspector_is_remembered_and_leaves_check_icons(cx: &mut TestAppCon
     let (window, _) = open_featured(cx);
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
+        assert!(
+            on_screen(window, "inspector"),
+            "the inspector shows at first"
+        );
         window.click("collapse-inspector", cx);
     })
     .unwrap();
@@ -275,10 +279,20 @@ fn hiding_the_inspector_is_remembered_and_leaves_check_icons(cx: &mut TestAppCon
             .inspector_collapsed
     });
     assert!(collapsed, "hiding the inspector is remembered");
-    let icon = format!("inspector-check-icon-{}", fixtures::SNAPSHOT_CHECK_ID);
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
-        window.click(gpui_kit::SharedString::from(icon), cx);
+        assert!(
+            !on_screen(window, "inspector"),
+            "the inspector leaves the screen"
+        );
+        let icon = window.find(check_rail_icon());
+        assert!(icon.visible(), "its check icons stay on screen");
+        assert!(
+            window.viewport_size().width - icon.bounds().right() < px(24.),
+            "the icons sit at the window's right edge: {:?}",
+            icon.bounds()
+        );
+        window.click(check_rail_icon(), cx);
     })
     .unwrap();
     cx.run_until_parked();
@@ -293,7 +307,6 @@ fn hiding_the_inspector_is_remembered_and_leaves_check_icons(cx: &mut TestAppCon
 
 #[gpui_kit::test]
 fn the_check_rail_brings_the_inspector_back(cx: &mut TestAppContext) {
-    use app_state_ui::StoresExt as _;
     let (window, _) = open_featured(cx);
     for button in ["collapse-inspector", "expand-inspector"] {
         cx.update_window(window, |_, window, cx| {
@@ -303,14 +316,25 @@ fn the_check_rail_brings_the_inspector_back(cx: &mut TestAppContext) {
         .unwrap();
         cx.run_until_parked();
     }
-    let collapsed = cx.update(|cx| {
-        cx.stores()
-            .settings()
-            .read(cx)
-            .preferences()
-            .inspector_collapsed
-    });
-    assert!(!collapsed, "the rail's button shows the inspector again");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            on_screen(window, "inspector") && !on_screen(window, check_rail_icon()),
+            "the rail's button swaps the rail for the inspector: inspector {:?}, icon {:?}",
+            window.try_find("inspector"),
+            window.try_find(check_rail_icon())
+        );
+    })
+    .unwrap();
+}
+
+/// Whether `id` was painted inside the window in the last frame.
+fn on_screen(window: &gpui_kit::Window, id: impl Into<gpui_kit::ElementId>) -> bool {
+    window.try_find(id).is_some_and(|element| element.visible())
+}
+
+fn check_rail_icon() -> gpui_kit::SharedString {
+    format!("inspector-check-icon-{}", fixtures::SNAPSHOT_CHECK_ID).into()
 }
 
 #[gpui_kit::test]
