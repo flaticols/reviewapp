@@ -457,7 +457,7 @@ fn hiding_the_inspector_is_remembered_and_leaves_check_icons(cx: &mut TestAppCon
             on_screen(window, "inspector"),
             "the inspector shows at first"
         );
-        window.click("collapse-inspector", cx);
+        window.click("toggle-inspector", cx);
     })
     .unwrap();
     cx.run_until_parked();
@@ -496,26 +496,46 @@ fn hiding_the_inspector_is_remembered_and_leaves_check_icons(cx: &mut TestAppCon
 }
 
 #[gpui_kit::test]
-fn the_check_rail_brings_the_inspector_back(cx: &mut TestAppContext) {
+fn the_title_bar_holds_the_only_inspector_toggle_at_its_right_end(cx: &mut TestAppContext) {
     let (window, _) = open_featured(cx);
-    for button in ["collapse-inspector", "expand-inspector"] {
+    for inspector_shown in [true, false, true] {
         cx.update_window(window, |_, window, cx| {
             window.render_frame(cx);
-            window.click(button, cx);
+            assert_eq!(
+                on_screen(window, "inspector"),
+                inspector_shown,
+                "the title bar's toggle shows and hides the inspector"
+            );
+            assert_eq!(
+                on_screen(window, check_rail_icon()),
+                !inspector_shown,
+                "the check rail stands in for the hidden inspector"
+            );
+            let toggle = window.find("toggle-inspector");
+            assert!(toggle.visible(), "the toggle stays in the title bar");
+            for earlier in ["toggle-focus", "notifications"] {
+                assert!(
+                    toggle.bounds().left() >= window.find(earlier).bounds().right(),
+                    "the toggle sits right of {earlier}: {:?}",
+                    toggle.bounds()
+                );
+            }
+            assert!(
+                window.viewport_size().width - toggle.bounds().right() < px(24.),
+                "the toggle ends the title bar: {:?}",
+                toggle.bounds()
+            );
+            for duplicate in ["collapse-inspector", "expand-inspector"] {
+                assert!(
+                    window.try_find(duplicate).is_none(),
+                    "{duplicate} duplicates the title bar's toggle (inspector shown: {inspector_shown})"
+                );
+            }
+            window.click("toggle-inspector", cx);
         })
         .unwrap();
         cx.run_until_parked();
     }
-    cx.update_window(window, |_, window, cx| {
-        window.render_frame(cx);
-        assert!(
-            on_screen(window, "inspector") && !on_screen(window, check_rail_icon()),
-            "the rail's button swaps the rail for the inspector: inspector {:?}, icon {:?}",
-            window.try_find("inspector"),
-            window.try_find(check_rail_icon())
-        );
-    })
-    .unwrap();
 }
 
 /// Whether `id` was painted inside the window in the last frame.
