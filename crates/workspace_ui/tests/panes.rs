@@ -3,10 +3,10 @@
 
 use gpui_kit::component::Root;
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, TestAppContext, px, size};
+use gpui_kit::{AnyWindowHandle, AppContext as _, Entity, Focusable as _, TestAppContext, px, size};
 use pr_model::{PullRequestKey, RepoSlug};
 use review_thread_ui::{
-    PaneState, ReviewLayout, ReviewPanes, ReviewThreadView, ScrollAnchor, SplitAxis,
+    PaneState, ReviewPanes, ReviewThreadView, ScrollAnchor, SplitAxis,
     TimelineFilter,
 };
 use workspace_ui::launch;
@@ -60,7 +60,6 @@ fn render(window: AnyWindowHandle, cx: &mut TestAppContext) {
 fn changes_at(file: &str) -> PaneState {
     PaneState {
         filter: TimelineFilter::Changes,
-        outline: true,
         scroll: ScrollAnchor {
             file: Some(file.into()),
             row: 0,
@@ -128,8 +127,8 @@ fn count(panes: &Entity<ReviewPanes>, cx: &mut TestAppContext) -> usize {
     panes.read_with(cx, |panes, _| panes.pane_count())
 }
 
-/// Each pane's file tree column, measured in the last frame.
-fn outline_heights(
+/// Each pane's height, measured in the last frame.
+fn pane_heights(
     window: AnyWindowHandle,
     panes: &Entity<ReviewPanes>,
     cx: &mut TestAppContext,
@@ -142,8 +141,7 @@ fn outline_heights(
         ids.iter()
             .map(|id| {
                 window
-                    .within(("review-pane", *id))
-                    .find("outline")
+                    .find(("review-pane", *id))
                     .bounds()
                     .size
                     .height
@@ -159,7 +157,7 @@ fn outline_heights(
 fn every_pane_fills_its_share_of_the_window(cx: &mut TestAppContext) {
     let (window, panes) = open_panes(cx);
     press(window, &["ctrl-b", "%", "ctrl-b", "\""], cx);
-    let heights = outline_heights(window, &panes, cx);
+    let heights = pane_heights(window, &panes, cx);
     assert!(
         heights.iter().all(|height| *height > 400.),
         "pane heights: {heights:?}"
@@ -254,18 +252,152 @@ fn closing_the_diffing_pane_hands_the_duty_on(cx: &mut TestAppContext) {
     assert!(diffs);
 }
 
-#[gpui_kit::test]
-fn hiding_one_panes_tree_hides_it_for_that_pane(cx: &mut TestAppContext) {
-    let (_, pane) = open_pane(PaneState::default(), cx);
-    pane.update(cx, |pane, cx| pane.toggle_outline(cx));
-    let visible = cx.update(|cx| pane.read(cx).outline_visible(cx));
-    assert!(!visible);
+/// The panes' entity ids, first halves before second halves.
+fn pane_ids(panes: &Entity<ReviewPanes>, cx: &mut TestAppContext) -> Vec<u64> {
+    panes.read_with(cx, |panes, _| {
+        panes.panes().iter().map(|pane| pane.entity_id().as_u64()).collect()
+    })
+}
+
+fn files(panes: &Entity<ReviewPanes>, cx: &mut TestAppContext) -> Vec<Option<String>> {
+    panes.read_with(cx, |panes, cx| {
+        panes
+            .panes()
+            .iter()
+            .map(|pane| pane.read(cx).pane_state().scroll.file)
+            .collect()
+    })
+}
+
+fn click(window: AnyWindowHandle, id: &str, cx: &mut TestAppContext) {
+    let id = gpui_kit::SharedString::from(id.to_string());
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(id, cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    render(window, cx);
+}
+
+fn tree_row(path: &str) -> String {
+    format!("outline-{path}")
 }
 
 #[gpui_kit::test]
-fn hiding_one_panes_tree_leaves_the_setting_for_new_panes_alone(cx: &mut TestAppContext) {
-    let (_, pane) = open_pane(PaneState::default(), cx);
-    pane.update(cx, |pane, cx| pane.toggle_outline(cx));
-    assert!(cx.update(|cx| ReviewLayout::get(cx).outline));
+fn a_split_draws_one_file_tree(cx: &mut TestAppContext) {
+    let (window, panes) = open_panes(cx);
+    press(window, &["ctrl-b", "%"], cx);
+    let ids = pane_ids(&panes, cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("outline").visible(), "the review shows a tree");
+        for id in ids {
+            assert!(
+                window.within(("review-pane", id)).try_find("outline").is_none(),
+                "pane {id} draws no tree of its own"
+            );
+        }
+    })
+    .unwrap();
 }
 
+#[gpui_kit::test]
+fn a_tree_click_scrolls_only_the_focused_pane(cx: &mut TestAppContext) {
+    let (window, panes) = open_panes(cx);
+    press(window, &["ctrl-b", "%", "ctrl-b", "left"], cx);
+    let before = files(&panes, cx);
+    click(window, &tree_row(RENDER), cx);
+    assert_eq!(files(&panes, cx), vec![Some(RENDER.into()), before[1].clone()]);
+}
+
+#[gpui_kit::test]
+fn clicking_a_pane_then_the_tree_moves_that_pane(cx: &mut TestAppContext) {
+    let (window, panes) = open_panes(cx);
+    press(window, &["ctrl-b", "%"], cx);
+    let ids = pane_ids(&panes, cx);
+    let before = files(&panes, cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(("review-pane", ids[0]), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    click(window, &tree_row(RENDER), cx);
+    assert_eq!(files(&panes, cx), vec![Some(RENDER.into()), before[1].clone()]);
+}
+
+#[gpui_kit::test]
+fn after_a_tree_click_cmd_f_reaches_the_pane(cx: &mut TestAppContext) {
+    let (window, _) = open_panes(cx);
+    click(window, &tree_row(RENDER), cx);
+    press(window, &["cmd-f"], cx);
+    cx.update_window(window, |_, window, _| {
+        assert!(window.find("find-bar").visible(), "⌘F opens find in the pane");
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn escape_in_the_tree_returns_focus_to_the_pane(cx: &mut TestAppContext) {
+    let (window, panes) = open_panes(cx);
+    click(window, &tree_row(RENDER), cx);
+    press(window, &["escape"], cx);
+    let pane = panes.read_with(cx, |panes, _| panes.focused_view());
+    cx.update_window(window, |_, window, cx| {
+        assert!(
+            pane.read(cx).focus_handle(cx).is_focused(window),
+            "escape hands the keyboard back to the pane"
+        );
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn a_split_keeps_folded_folders(cx: &mut TestAppContext) {
+    let (window, _) = open_panes(cx);
+    click(window, "outline-crates/review/src/", cx);
+    press(window, &["ctrl-b", "%"], cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window.try_find(tree_row(RENDER)).is_none(),
+            "the folded folder stays folded"
+        );
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn the_tree_follows_the_focused_panes_scroll(cx: &mut TestAppContext) {
+    let (window, panes) = open_panes(cx);
+    press(window, &["ctrl-b", "%"], cx);
+    click(window, &tree_row(HUNK), cx);
+    let selected = |cx: &mut TestAppContext| panes.read_with(cx, |panes, cx| panes.selected_file(cx));
+    assert_eq!(selected(cx).as_deref(), Some(HUNK));
+    press(window, &["ctrl-b", "left"], cx);
+    assert_ne!(selected(cx).as_deref(), Some(HUNK), "the left pane is not at hunk.rs");
+}
+
+#[gpui_kit::test]
+fn a_tree_click_leaves_a_commit_that_lacks_the_file(cx: &mut TestAppContext) {
+    let (window, panes) = open_panes(cx);
+    let pane = panes.read_with(cx, |panes, _| panes.focused_view());
+    let sha = pane.read_with(cx, |pane, _| pane.detail().unwrap().commits[0].sha.clone());
+    pane.update(cx, |pane, cx| pane.show_commit(sha, cx));
+    for _ in 0..20 {
+        if !pane.read_with(cx, |pane, _| pane.shown_files()).is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        cx.run_until_parked();
+    }
+    let (all, shown) = pane.read_with(cx, |pane, _| {
+        let all: Vec<String> = pane.detail().unwrap().files.iter().map(|f| f.path.clone()).collect();
+        (all, pane.shown_files())
+    });
+    let missing = all.into_iter().find(|path| !shown.contains(path)).expect("the commit drops a file");
+    click(window, &tree_row(&missing), cx);
+    let shown = pane.read_with(cx, |pane, _| pane.shown_files());
+    assert!(shown.contains(&missing), "the pane went back to all commits: {shown:?}");
+}

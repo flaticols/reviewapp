@@ -67,5 +67,9 @@ gpui_kit::actions!(
         ZoomPane,
         /// Closes the focused review pane.
         ClosePane,
+        /// Lists the review's files to jump the focused pane to one.
+        GoToFile,
+        /// Finds text in the focused review pane.
+        FindInPane,
     ]
 );

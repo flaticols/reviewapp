@@ -15,6 +15,7 @@ pub fn install(cx: &mut App) {
         ]),
         Menu::new("File").items([
             MenuItem::action("Search…", FocusSearch),
+            MenuItem::action("Go to File…", app_state_ui::actions::GoToFile),
             MenuItem::action("Refresh", Refresh),
             MenuItem::separator(),
             MenuItem::action("Close Window", CloseWindow),

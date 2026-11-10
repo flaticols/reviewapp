@@ -424,6 +424,8 @@ pub struct Preferences {
     pub folded_sections: Vec<String>,
     /// The review's right sidebar is hidden, leaving a strip of check icons.
     pub inspector_collapsed: bool,
+    /// The review's file tree is hidden.
+    pub outline_collapsed: bool,
     /// Lists repositories in the sidebar under their organization or owner.
     pub group_repositories_by_owner: bool,
 }
@@ -578,6 +580,7 @@ impl Default for Preferences {
             folded_sections: Vec::new(),
             group_repositories_by_owner: false,
             inspector_collapsed: false,
+            outline_collapsed: false,
         }
     }
 }

@@ -108,22 +108,30 @@ fn ctrl_b_percent_splits_the_open_review(cx: &mut TestAppContext) {
     assert_eq!(panes, Some(2));
 }
 
-/// The title bar's sidebar button follows the focused pane, so the window redraws when
-/// a pane changes.
 #[gpui_kit::test]
-fn hiding_a_panes_tree_redraws_the_title_bar(cx: &mut TestAppContext) {
-    let (_, workspace) = open_featured(cx);
-    let redraws = std::rc::Rc::new(std::cell::Cell::new(0));
-    let _watch = cx.update(|cx| {
-        let redraws = redraws.clone();
-        cx.observe(&workspace, move |_, _| redraws.set(redraws.get() + 1))
-    });
-    let pane = cx
-        .update(|cx| workspace.read(cx).review_view(cx))
-        .expect("review open");
-    pane.update(cx, |pane, cx| pane.toggle_outline(cx));
+fn cmd_b_hides_the_shared_tree_and_remembers_it(cx: &mut TestAppContext) {
+    use app_state_ui::StoresExt as _;
+    let (window, _) = open_featured(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(on_screen(window, "outline"), "the tree shows at first");
+        window.press("cmd-b", cx);
+    })
+    .unwrap();
     cx.run_until_parked();
-    assert!(redraws.get() > 0);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(!on_screen(window, "outline"), "⌘B hides the tree");
+    })
+    .unwrap();
+    let collapsed = cx.update(|cx| {
+        cx.stores()
+            .settings()
+            .read(cx)
+            .preferences()
+            .outline_collapsed
+    });
+    assert!(collapsed, "hiding the tree is remembered");
 }
 
 #[gpui_kit::test]
@@ -227,6 +235,188 @@ fn escape_in_the_composer_keeps_the_review_and_its_draft(cx: &mut TestAppContext
     assert_eq!(cx.update(|cx| workspace.read(cx).reviewing(cx)), None);
 }
 
+/// Each pane's top file, first halves before second halves.
+fn pane_files(workspace: &Entity<Workspace>, cx: &mut TestAppContext) -> Vec<Option<String>> {
+    cx.update(|cx| {
+        let panes = workspace.read(cx).review_panes().expect("review open");
+        let panes = panes.read(cx).panes();
+        panes
+            .iter()
+            .map(|pane| pane.read(cx).pane_state().scroll.file)
+            .collect()
+    })
+}
+
+#[gpui_kit::test]
+fn alt_shift_o_jumps_the_focused_pane_to_a_fuzzy_match(cx: &mut TestAppContext) {
+    let (window, workspace) = open_featured(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.press("ctrl-b", cx);
+        window.press("%", cx);
+        window.render_frame(cx);
+        window.press("alt-shift-o", cx);
+    })
+    .unwrap();
+    settle(window, "go-to-file", cx);
+    let before = pane_files(&workspace, cx);
+    // The query reaches the list after this update ends, so Enter goes in the next one.
+    cx.update_window(window, |_, window, cx| window.input("rndr", cx))
+        .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.press("enter", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window.try_find("go-to-file").is_none(),
+            "picking a file closes go-to-file"
+        );
+    })
+    .unwrap();
+    assert_eq!(
+        pane_files(&workspace, cx),
+        vec![
+            before[0].clone(),
+            Some("crates/review/src/render.rs".into())
+        ],
+        "only the focused pane jumps"
+    );
+}
+
+#[gpui_kit::test]
+fn alt_shift_o_types_in_the_composer(cx: &mut TestAppContext) {
+    let (window, _) = open_featured(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("description-reply", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.press("alt-shift-o", cx);
+        window.render_frame(cx);
+        assert!(
+            window.try_find("go-to-file").is_none(),
+            "go-to-file stays shut while typing"
+        );
+    })
+    .unwrap();
+}
+
+/// Opens find in the focused pane and searches for `query`.
+fn find_text(window: AnyWindowHandle, query: &str, cx: &mut TestAppContext) {
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.press("cmd-f", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let query = query.to_string();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.input(&query, cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+}
+
+fn press_and_render(window: AnyWindowHandle, key: &str, cx: &mut TestAppContext) {
+    let key = key.to_string();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.press(&key, cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+}
+
+/// The find bar's count, as painted.
+fn find_count(window: AnyWindowHandle, cx: &mut TestAppContext) -> String {
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window
+            .find("find-count")
+            .label()
+            .unwrap_or_default()
+            .to_string()
+    })
+    .unwrap()
+}
+
+#[gpui_kit::test]
+fn cmd_f_counts_and_steps_through_matches(cx: &mut TestAppContext) {
+    let (window, _) = open_featured(cx);
+    find_text(window, "fn ", cx);
+    press_and_render(window, "enter", cx);
+    let count = find_count(window, cx);
+    assert!(count.starts_with("2 of "), "Enter steps to the second match: {count}");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let current = window.find("find-match-current");
+        assert!(current.visible(), "the current match is on screen: {:?}", current.bounds());
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn shift_enter_wraps_to_the_last_match(cx: &mut TestAppContext) {
+    let (window, _) = open_featured(cx);
+    find_text(window, "fn ", cx);
+    press_and_render(window, "shift-enter", cx);
+    let count = find_count(window, cx);
+    let total = count.rsplit(' ').next().unwrap_or_default().to_string();
+    assert_eq!(count, format!("{total} of {total}"), "⇧Enter from the first wraps to the last");
+}
+
+#[gpui_kit::test]
+fn escape_closes_find_and_keeps_the_review(cx: &mut TestAppContext) {
+    let (window, workspace) = open_featured(cx);
+    find_text(window, "fn ", cx);
+    press_and_render(window, "escape", cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(!on_screen(window, "find-bar"), "Escape closes find");
+    })
+    .unwrap();
+    assert_eq!(
+        cx.update(|cx| workspace.read(cx).reviewing(cx)),
+        Some(featured()),
+        "the review stays open"
+    );
+}
+
+#[gpui_kit::test]
+fn switching_tabs_reruns_find(cx: &mut TestAppContext) {
+    let (window, _) = open_featured(cx);
+    find_text(window, "hunk hash", cx);
+    let everything = find_count(window, cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(("timeline-filter", 2usize), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let changes = find_count(window, cx);
+    assert_ne!(everything, changes, "Changes drops the description's match");
+}
+
+#[gpui_kit::test]
+fn find_matches_comment_text(cx: &mut TestAppContext) {
+    let (window, _) = open_featured(cx);
+    find_text(window, "pick up its thread", cx);
+    assert_eq!(find_count(window, cx), "1 of 1");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("find-match-current").visible(), "the comment is outlined");
+    })
+    .unwrap();
+}
+
 #[gpui_kit::test]
 fn a_check_opens_its_log_and_escape_closes_only_the_sheet(cx: &mut TestAppContext) {
     use gpui_kit::component::WindowExt as _;
@@ -263,6 +453,10 @@ fn hiding_the_inspector_is_remembered_and_leaves_check_icons(cx: &mut TestAppCon
     let (window, _) = open_featured(cx);
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
+        assert!(
+            on_screen(window, "inspector"),
+            "the inspector shows at first"
+        );
         window.click("collapse-inspector", cx);
     })
     .unwrap();
@@ -275,10 +469,20 @@ fn hiding_the_inspector_is_remembered_and_leaves_check_icons(cx: &mut TestAppCon
             .inspector_collapsed
     });
     assert!(collapsed, "hiding the inspector is remembered");
-    let icon = format!("inspector-check-icon-{}", fixtures::SNAPSHOT_CHECK_ID);
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
-        window.click(gpui_kit::SharedString::from(icon), cx);
+        assert!(
+            !on_screen(window, "inspector"),
+            "the inspector leaves the screen"
+        );
+        let icon = window.find(check_rail_icon());
+        assert!(icon.visible(), "its check icons stay on screen");
+        assert!(
+            window.viewport_size().width - icon.bounds().right() < px(24.),
+            "the icons sit at the window's right edge: {:?}",
+            icon.bounds()
+        );
+        window.click(check_rail_icon(), cx);
     })
     .unwrap();
     cx.run_until_parked();
@@ -293,7 +497,6 @@ fn hiding_the_inspector_is_remembered_and_leaves_check_icons(cx: &mut TestAppCon
 
 #[gpui_kit::test]
 fn the_check_rail_brings_the_inspector_back(cx: &mut TestAppContext) {
-    use app_state_ui::StoresExt as _;
     let (window, _) = open_featured(cx);
     for button in ["collapse-inspector", "expand-inspector"] {
         cx.update_window(window, |_, window, cx| {
@@ -303,14 +506,25 @@ fn the_check_rail_brings_the_inspector_back(cx: &mut TestAppContext) {
         .unwrap();
         cx.run_until_parked();
     }
-    let collapsed = cx.update(|cx| {
-        cx.stores()
-            .settings()
-            .read(cx)
-            .preferences()
-            .inspector_collapsed
-    });
-    assert!(!collapsed, "the rail's button shows the inspector again");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            on_screen(window, "inspector") && !on_screen(window, check_rail_icon()),
+            "the rail's button swaps the rail for the inspector: inspector {:?}, icon {:?}",
+            window.try_find("inspector"),
+            window.try_find(check_rail_icon())
+        );
+    })
+    .unwrap();
+}
+
+/// Whether `id` was painted inside the window in the last frame.
+fn on_screen(window: &gpui_kit::Window, id: impl Into<gpui_kit::ElementId>) -> bool {
+    window.try_find(id).is_some_and(|element| element.visible())
+}
+
+fn check_rail_icon() -> gpui_kit::SharedString {
+    format!("inspector-check-icon-{}", fixtures::SNAPSHOT_CHECK_ID).into()
 }
 
 #[gpui_kit::test]

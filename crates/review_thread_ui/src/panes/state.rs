@@ -1,5 +1,4 @@
-//! What one pane keeps when the layout is saved: its tab, its tree and where it is
-//! scrolled.
+//! What one pane keeps when the layout is saved: its tab and where it is scrolled.
 
 use serde::{Deserialize, Serialize};
 
@@ -9,8 +8,6 @@ use crate::TimelineFilter;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PaneState {
     pub filter: TimelineFilter,
-    /// Whether the pane shows its file tree.
-    pub outline: bool,
     pub scroll: ScrollAnchor,
 }
 
@@ -18,7 +15,6 @@ impl Default for PaneState {
     fn default() -> Self {
         Self {
             filter: TimelineFilter::Everything,
-            outline: true,
             scroll: ScrollAnchor::default(),
         }
     }
@@ -33,4 +29,16 @@ pub struct ScrollAnchor {
     pub row: usize,
     /// How far into that row the top edge is, in pixels.
     pub offset: f32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_layout_saved_with_a_per_pane_tree_still_loads() {
+        let saved = r#"{"filter":"Changes","outline":false,"scroll":{"file":"a.rs","row":2,"offset":4.0}}"#;
+        let state: PaneState = serde_json::from_str(saved).expect("old layout loads");
+        assert_eq!(state.scroll.file.as_deref(), Some("a.rs"));
+    }
 }

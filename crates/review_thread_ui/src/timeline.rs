@@ -16,7 +16,8 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Entity, FontWeight, InteractiveElement as _,
-    IntoElement, ParentElement as _, SharedString, Styled as _, Window, div, list,
+    IntoElement, ParentElement as _, SharedString, Styled as _, TestSupportExt as _, Window,
+    div, list,
     prelude::FluentBuilder as _,
 };
 use pr_model::Timestamp;
@@ -202,6 +203,21 @@ impl ReviewThreadView {
             TimelineRow::Composer => self.render_composer(cx).into_any_element(),
         };
         let last = ix + 1 == self.rows.len();
+        let outlined = self
+            .current_match()
+            .is_some_and(|found| found.row == ix && found.place == crate::find::FindPlace::Body);
+        let element = if outlined {
+            div()
+                .id("find-match-current")
+                .test_support()
+                .rounded(cx.theme().radius)
+                .border_2()
+                .border_color(cx.theme().warning)
+                .child(element)
+                .into_any_element()
+        } else {
+            element
+        };
         div()
             .px_6()
             .when(row.starts_entry(), |this| {
@@ -368,6 +384,15 @@ impl ReviewThreadView {
             .collapsed(self.collapsed.contains(path))
             .viewed(detail.is_viewed(path))
             .document_order(row_ix as u64);
+        if let Some(query) = self.find_query(cx) {
+            let current = self.current_match().and_then(|found| match &found.place {
+                crate::find::FindPlace::Code { line, range } if found.row == row_ix => {
+                    Some((*line, range.clone()))
+                }
+                _ => None,
+            });
+            element = element.find(query, current);
+        }
         match row {
             DiffRow::Header => {
                 let menu_view = cx.entity();
