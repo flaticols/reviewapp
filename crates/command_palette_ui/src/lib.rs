@@ -1,6 +1,8 @@
 //! The command palette behind ⌘K and the title bar's search field: pull requests, files
 //! of the open review, and commands, in one filterable list.
 
+mod fuzzy;
+
 use std::rc::Rc;
 
 use gpui_kit::component::{
@@ -11,6 +13,7 @@ use gpui_kit::{
     Action, App, AppContext as _, ParentElement as _, SharedString, Styled as _, Window,
 };
 
+pub use fuzzy::rank;
 pub use gpui_kit::assets::IconName;
 pub use gpui_kit::component::IndexPath;
 
