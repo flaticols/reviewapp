@@ -108,22 +108,30 @@ fn ctrl_b_percent_splits_the_open_review(cx: &mut TestAppContext) {
     assert_eq!(panes, Some(2));
 }
 
-/// The title bar's sidebar button follows the focused pane, so the window redraws when
-/// a pane changes.
 #[gpui_kit::test]
-fn hiding_a_panes_tree_redraws_the_title_bar(cx: &mut TestAppContext) {
-    let (_, workspace) = open_featured(cx);
-    let redraws = std::rc::Rc::new(std::cell::Cell::new(0));
-    let _watch = cx.update(|cx| {
-        let redraws = redraws.clone();
-        cx.observe(&workspace, move |_, _| redraws.set(redraws.get() + 1))
-    });
-    let pane = cx
-        .update(|cx| workspace.read(cx).review_view(cx))
-        .expect("review open");
-    pane.update(cx, |pane, cx| pane.toggle_outline(cx));
+fn cmd_b_hides_the_shared_tree_and_remembers_it(cx: &mut TestAppContext) {
+    use app_state_ui::StoresExt as _;
+    let (window, _) = open_featured(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(on_screen(window, "outline"), "the tree shows at first");
+        window.press("cmd-b", cx);
+    })
+    .unwrap();
     cx.run_until_parked();
-    assert!(redraws.get() > 0);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(!on_screen(window, "outline"), "⌘B hides the tree");
+    })
+    .unwrap();
+    let collapsed = cx.update(|cx| {
+        cx.stores()
+            .settings()
+            .read(cx)
+            .preferences()
+            .outline_collapsed
+    });
+    assert!(collapsed, "hiding the tree is remembered");
 }
 
 #[gpui_kit::test]

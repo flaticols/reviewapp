@@ -1,25 +1,31 @@
-//! The review screen split into panes: each a full copy of the review that scrolls on
-//! its own, with one inspector for all of them.
+//! The review screen split into panes: each a copy of the review's timeline that
+//! scrolls on its own, with one file tree and one inspector for all of them.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use app_state_ui::StoresExt as _;
 use app_state_ui::actions::{
-    ClosePane, FocusNextPane, FocusPaneDown, FocusPaneLeft, FocusPaneRight, FocusPaneUp,
-    SplitSideBySide, SplitStacked, ZoomPane,
+    CheckOut, ClosePane, FocusNextPane, FocusPaneDown, FocusPaneLeft, FocusPaneRight,
+    FocusPaneUp, GoBack, OpenInZed, ReviewWithAgent, SplitSideBySide, SplitStacked,
+    SubmitComment, SubmitReview, ZoomPane,
 };
+use app_state_ui::{DetailState, PullRequestStoreEvent};
 use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::resizable::{h_resizable, resizable_panel};
+use gpui_kit::component::tree::{TreeEvent, TreeState};
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, CursorStyle, DragMoveEvent, Empty, Entity,
     EntityId, EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Subscription, Task, Window, div, prelude::FluentBuilder as _, px, relative,
+    Subscription, Task, TestSupportExt as _, Window, div, prelude::FluentBuilder as _, px,
+    relative,
 };
 use pr_model::PullRequestKey;
 use serde::{Deserialize, Serialize};
 
 use super::{Direction, PaneState, PaneTree, SplitAxis};
-use crate::{ReviewThreadEvent, ReviewThreadView};
+use crate::outline::{build_file_tree, to_tree_items};
+use crate::{ReviewLayout, ReviewThreadEvent, ReviewThreadView};
 
 pub(crate) const CONTEXT: &str = "ReviewPanes";
 /// The name the layout is saved under, per pull request.
@@ -56,6 +62,16 @@ pub struct ReviewPanes {
     /// it arrived. Until then nothing is saved, so a half-open review can't overwrite it.
     restored: bool,
     watches: HashMap<EntityId, [Subscription; 2]>,
+    /// The file tree all panes share; picking a file scrolls the focused pane.
+    file_tree: Entity<TreeState>,
+    /// The paths the tree was last built from.
+    file_tree_paths: Vec<String>,
+    /// Folders the reviewer folded, by path, kept when the tree is rebuilt.
+    folded_dirs: HashSet<String>,
+    /// The file the tree last revealed or followed, so selecting it again from code
+    /// doesn't scroll a pane.
+    tree_revealed: Option<String>,
+    _subscriptions: [Subscription; 3],
     _load: Task<()>,
 }
 
@@ -87,6 +103,28 @@ impl ReviewPanes {
             this.update_in(cx, |this, window, cx| this.restore(saved, window, cx))
                 .ok();
         });
+        let file_tree = cx.new(|cx| TreeState::new(cx));
+        let subscriptions = [
+            cx.observe(&file_tree, |this: &mut Self, _, cx| this.on_file_tree_changed(cx)),
+            cx.subscribe(&file_tree, |this: &mut Self, _, event: &TreeEvent, _| match event {
+                TreeEvent::Collapsed(id) => {
+                    this.folded_dirs.insert(id.trim_end_matches('/').to_string());
+                }
+                TreeEvent::Expanded(id) => {
+                    this.folded_dirs.remove(id.trim_end_matches('/'));
+                }
+            }),
+            cx.subscribe(
+                &cx.stores().pull_requests().clone(),
+                |this: &mut Self, _, event: &PullRequestStoreEvent, cx| {
+                    if let PullRequestStoreEvent::DetailChanged(key) = event
+                        && key == &this.key
+                    {
+                        this.sync_file_tree(cx);
+                    }
+                },
+            ),
+        ];
         let mut panes = Self {
             key,
             back_label,
@@ -95,8 +133,14 @@ impl ReviewPanes {
             zoomed: false,
             restored: false,
             watches: HashMap::new(),
+            file_tree,
+            file_tree_paths: Vec::new(),
+            folded_dirs: HashSet::new(),
+            tree_revealed: None,
+            _subscriptions: subscriptions,
             _load: load,
         };
+        panes.sync_file_tree(cx);
         panes.watch(&first, window, cx);
         window.focus(&first.focus_handle(cx), cx);
         panes
@@ -120,6 +164,69 @@ impl ReviewPanes {
     /// The focused pane's position, first halves before second halves.
     pub fn focused_index(&self) -> usize {
         self.focused
+    }
+
+    /// The file the shared tree has selected.
+    #[doc(hidden)]
+    pub fn selected_file(&self, cx: &App) -> Option<String> {
+        self.file_tree
+            .read(cx)
+            .selected_entry()
+            .filter(|entry| !entry.is_folder())
+            .map(|entry| entry.item().id.to_string())
+    }
+
+    /// Rebuilds the file tree when the set of changed files differs from what it shows,
+    /// keeping folders the reviewer folded.
+    fn sync_file_tree(&mut self, cx: &mut Context<Self>) {
+        let paths: Vec<String> = match cx.stores().pull_requests().read(cx).detail(&self.key) {
+            Some(DetailState::Loaded(detail)) => {
+                detail.files.iter().map(|file| file.path.clone()).collect()
+            }
+            _ => return,
+        };
+        if paths == self.file_tree_paths {
+            return;
+        }
+        let items = to_tree_items(&build_file_tree(&paths), &self.folded_dirs);
+        self.file_tree
+            .update(cx, |tree, cx| tree.set_items(items, cx));
+        self.file_tree_paths = paths;
+        self.follow_focused(cx);
+    }
+
+    /// Reveals the file the tree selected, by click or arrow keys, in the focused pane.
+    fn on_file_tree_changed(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.selected_file(cx) else {
+            return;
+        };
+        if self.tree_revealed.as_ref() == Some(&path) {
+            return;
+        }
+        self.focused_view()
+            .update(cx, |pane, cx| pane.reveal_file(&path, cx));
+        self.tree_revealed = Some(path);
+    }
+
+    /// Selects the file at the top of the focused pane in the tree, without scrolling
+    /// anything. A file inside a folded folder leaves nothing selected.
+    fn follow_focused(&mut self, cx: &mut Context<Self>) {
+        let file = self.focused_view().read(cx).pane_state().scroll.file;
+        if file == self.selected_file(cx) {
+            return;
+        }
+        self.tree_revealed = file.clone();
+        self.file_tree.update(cx, |tree, cx| {
+            let ix = file.and_then(|path| tree.index_of(&path.into()));
+            tree.set_selected_index(ix, cx);
+        });
+    }
+
+    /// Runs `action` in the focused pane, for a shortcut pressed while the tree has
+    /// the keyboard.
+    fn forward(&self, action: &dyn gpui_kit::Action, window: &mut Window, cx: &mut App) {
+        window.focus(&self.focused_view().focus_handle(cx), cx);
+        window.dispatch_action(action.boxed_clone(), cx);
     }
 
     /// Every pane, first halves before second halves.
@@ -164,6 +271,7 @@ impl ReviewPanes {
     fn focus(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.focused = ix;
         self.zoomed = false;
+        self.follow_focused(cx);
         self.changed(window, cx);
     }
 
@@ -239,7 +347,10 @@ impl ReviewPanes {
             pane,
             window,
             |this, _, event: &ReviewThreadEvent, _, cx| match event {
-                ReviewThreadEvent::ViewChanged => this.save(cx),
+                ReviewThreadEvent::ViewChanged => {
+                    this.save(cx);
+                    this.follow_focused(cx);
+                }
                 ReviewThreadEvent::Back | ReviewThreadEvent::Open(_) => cx.emit(event.clone()),
             },
         );
@@ -350,6 +461,7 @@ impl ReviewPanes {
         let ring = cx.theme().ring;
         div()
             .id(("review-pane", pane.entity_id().as_u64()))
+            .test_support()
             .size_full()
             .min_w_0()
             .min_h_0()
@@ -398,9 +510,30 @@ impl Render for ReviewPanes {
             let tree = self.tree.clone();
             self.render_node(&tree, 0, tree.count() > 1, cx)
         };
-        let (inspector, rail) = self.focused_view().update(cx, |pane, cx| {
-            (pane.render_inspector_panel(cx), pane.render_check_rail(cx))
+        let tree = self.file_tree.clone();
+        let (outline, inspector, rail) = self.focused_view().update(cx, |pane, cx| {
+            (
+                pane.render_outline_panel(&tree, cx),
+                pane.render_inspector_panel(cx),
+                pane.render_check_rail(cx),
+            )
         });
+        let body = match outline {
+            Some(outline) => {
+                let rem = window.rem_size();
+                h_resizable("review-outline")
+                    .child(
+                        resizable_panel()
+                            .visible(ReviewLayout::get(cx).outline)
+                            .size(rem * 16.25)
+                            .size_range(px(180.)..px(520.))
+                            .child(outline),
+                    )
+                    .child(resizable_panel().child(body))
+                    .into_any_element()
+            }
+            None => body,
+        };
         let content = match inspector {
             Some(inspector) => crate::with_inspector(body, inspector, rail, window, cx),
             None => body,
@@ -433,6 +566,26 @@ impl Render for ReviewPanes {
             }))
             .on_action(cx.listener(|this, _: &ZoomPane, window, cx| this.toggle_zoom(window, cx)))
             .on_action(cx.listener(|this, _: &ClosePane, window, cx| this.close(window, cx)))
+            // Reached only while the tree has the keyboard; a focused pane handles these
+            // itself first.
+            .on_action(cx.listener(|this, _: &GoBack, window, cx| {
+                window.focus(&this.focused_view().focus_handle(cx), cx)
+            }))
+            .on_action(cx.listener(|this, action: &SubmitComment, window, cx| {
+                this.forward(action, window, cx)
+            }))
+            .on_action(cx.listener(|this, action: &SubmitReview, window, cx| {
+                this.forward(action, window, cx)
+            }))
+            .on_action(cx.listener(|this, action: &OpenInZed, window, cx| {
+                this.forward(action, window, cx)
+            }))
+            .on_action(cx.listener(|this, action: &ReviewWithAgent, window, cx| {
+                this.forward(action, window, cx)
+            }))
+            .on_action(cx.listener(|this, action: &CheckOut, window, cx| {
+                this.forward(action, window, cx)
+            }))
             .child(content)
     }
 }

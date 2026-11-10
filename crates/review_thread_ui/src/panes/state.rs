@@ -1,5 +1,4 @@
-//! What one pane keeps when the layout is saved: its tab, its tree and where it is
-//! scrolled.
+//! What one pane keeps when the layout is saved: its tab and where it is scrolled.
 
 use serde::{Deserialize, Serialize};
 
@@ -9,8 +8,6 @@ use crate::TimelineFilter;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PaneState {
     pub filter: TimelineFilter,
-    /// Whether the pane shows its file tree.
-    pub outline: bool,
     pub scroll: ScrollAnchor,
 }
 
@@ -18,7 +15,6 @@ impl Default for PaneState {
     fn default() -> Self {
         Self {
             filter: TimelineFilter::Everything,
-            outline: true,
             scroll: ScrollAnchor::default(),
         }
     }

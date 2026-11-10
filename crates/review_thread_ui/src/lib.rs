@@ -31,7 +31,7 @@ use gpui_kit::component::{
     ActiveTheme as _, WindowExt as _, h_flex,
     input::{InputEvent, TextareaState},
     resizable::{h_resizable, resizable_panel},
-    tree::{TreeEvent, TreeState},
+    tree::TreeState,
     v_flex,
 };
 use gpui_kit::{
@@ -74,14 +74,13 @@ impl ReviewLayout {
     /// The current layout; until it first changes, the right sidebar is shown as the
     /// reviewer last left it.
     pub fn get(cx: &App) -> Self {
-        cx.try_global::<Self>().copied().unwrap_or_else(|| Self {
-            inspector: !cx
-                .stores()
-                .settings()
-                .read(cx)
-                .preferences()
-                .inspector_collapsed,
-            ..Self::default()
+        cx.try_global::<Self>().copied().unwrap_or_else(|| {
+            let preferences = cx.stores().settings().read(cx).preferences();
+            Self {
+                outline: !preferences.outline_collapsed,
+                inspector: !preferences.inspector_collapsed,
+                ..Self::default()
+            }
         })
     }
 
@@ -97,11 +96,15 @@ impl ReviewLayout {
         cx.refresh_windows();
     }
 
-    /// Shows or hides the file and thread sidebar.
+    /// Shows or hides the file and thread sidebar, and remembers the choice.
     pub fn toggle_outline(cx: &mut App) {
         Self::update(cx, |layout| {
             layout.outline = !layout.outline;
             layout.before_focus = None;
+        });
+        let collapsed = !Self::get(cx).outline;
+        cx.stores().settings().clone().update(cx, |settings, cx| {
+            settings.update_preferences(cx, |p| p.outline_collapsed = collapsed)
         });
     }
 
@@ -162,6 +165,13 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-b o", FocusNextPane, panes),
         KeyBinding::new("ctrl-b z", ZoomPane, panes),
         KeyBinding::new("ctrl-b x", ClosePane, panes),
+        // The pane's own bindings, for while the shared tree has the keyboard.
+        KeyBinding::new("escape", GoBack, panes),
+        KeyBinding::new("cmd-shift-o", OpenInZed, panes),
+        KeyBinding::new("cmd-shift-enter", SubmitReview, panes),
+        KeyBinding::new("cmd-shift-a", ReviewWithAgent, panes),
+        KeyBinding::new("cmd-shift-c", CheckOut, panes),
+        KeyBinding::new("cmd-enter", SubmitComment, panes),
         // Not while typing: on macOS ⌥⇧A types "Å".
         KeyBinding::new(
             "alt-shift-a",
@@ -216,12 +226,6 @@ pub struct ReviewThreadView {
     /// The draft the reviewer focused last, where quotes and references from the diff go.
     last_draft: Option<WeakEntity<TextareaState>>,
     list_state: ListState,
-    file_tree: Entity<TreeState>,
-    file_tree_paths: Vec<String>,
-    /// Folders the reviewer folded, by path, kept when the tree is rebuilt.
-    folded_dirs: HashSet<String>,
-    /// The file last revealed from the tree, so re-renders don't scroll to it again.
-    tree_revealed: Option<String>,
     items: Rc<Vec<TimelineItem>>,
     /// Agent runs the Reviews tab shows, newest first.
     runs: Vec<Entity<agent_review_ui::AgentRun>>,
@@ -237,8 +241,6 @@ pub struct ReviewThreadView {
     rows: Rc<Vec<rows::TimelineRow>>,
     /// The rem size the rows were measured at; a zoom remeasures them.
     measured_rem: Option<Pixels>,
-    /// Whether this pane shows its file tree; focus mode can still hide it.
-    outline: bool,
     /// Whether this pane recomputes diffs from the local clone. One pane of a split
     /// review does, so a clone is diffed once.
     diffs_locally: bool,
@@ -287,23 +289,7 @@ impl ReviewThreadView {
                 .rows(2)
                 .context_menu(false)
         });
-        let file_tree = cx.new(|cx| TreeState::new(cx));
         let mut subscriptions = vec![
-            cx.observe(&file_tree, |this: &mut Self, _, cx| {
-                this.on_file_tree_changed(cx)
-            }),
-            cx.subscribe(
-                &file_tree,
-                |this: &mut Self, _, event: &TreeEvent, _| match event {
-                    TreeEvent::Collapsed(id) => {
-                        this.folded_dirs
-                            .insert(id.trim_end_matches('/').to_string());
-                    }
-                    TreeEvent::Expanded(id) => {
-                        this.folded_dirs.remove(id.trim_end_matches('/'));
-                    }
-                },
-            ),
             cx.subscribe_in(
                 &store,
                 window,
@@ -364,10 +350,6 @@ impl ReviewThreadView {
             editing_finding: None,
             last_draft: None,
             list_state,
-            file_tree,
-            file_tree_paths: Vec::new(),
-            folded_dirs: HashSet::new(),
-            tree_revealed: None,
             items: Rc::default(),
             runs: Vec::new(),
             active_runs: Vec::new(),
@@ -377,7 +359,6 @@ impl ReviewThreadView {
             start_form_open: None,
             rows: Rc::default(),
             measured_rem: None,
-            outline: state.outline,
             diffs_locally,
             with_inspector: true,
             pending_scroll: Some(state.scroll),
@@ -445,7 +426,6 @@ impl ReviewThreadView {
                     self.diffed_head = head;
                     self.diff_locally(&detail, cx);
                 }
-                self.sync_file_tree(&detail, cx);
                 let reloaded = self.detail.is_some();
                 self.detail = Some(Rc::new(*detail));
                 self.load_error = None;
@@ -532,7 +512,6 @@ impl ReviewThreadView {
     pub fn pane_state(&self) -> PaneState {
         PaneState {
             filter: self.filter,
-            outline: self.outline,
             scroll: self.scroll_anchor(),
         }
     }
@@ -540,7 +519,6 @@ impl ReviewThreadView {
     /// Shows what `state` says: its tab and tree now, its scroll once rows exist.
     pub(crate) fn apply_pane_state(&mut self, state: PaneState, cx: &mut Context<Self>) {
         self.set_filter(state.filter);
-        self.outline = state.outline;
         match self.detail {
             Some(_) => self.scroll_to_anchor(&state.scroll, cx),
             None => self.pending_scroll = Some(state.scroll),
@@ -587,24 +565,6 @@ impl ReviewThreadView {
             _ => ListOffset::default(),
         };
         self.list_state.scroll_to(offset);
-    }
-
-    /// Whether the file tree shows: this pane's choice, unless focus mode hid it.
-    pub fn outline_visible(&self, cx: &App) -> bool {
-        self.outline && ReviewLayout::get(cx).outline
-    }
-
-    /// Shows or hides this pane's file tree. In focus mode it ends focus mode and shows
-    /// the tree, as the shared toggle did.
-    pub fn toggle_outline(&mut self, cx: &mut Context<Self>) {
-        if ReviewLayout::get(cx).outline {
-            self.outline = !self.outline;
-        } else {
-            ReviewLayout::toggle_outline(cx);
-            self.outline = true;
-        }
-        cx.emit(ReviewThreadEvent::ViewChanged);
-        cx.notify();
     }
 
     fn new_reply_input(
@@ -797,12 +757,15 @@ impl ReviewThreadView {
         highlights
     }
 
-    /// Scrolls to `path`, expanding it and switching to Changes when the current
-    /// filter does not show it.
+    /// Scrolls to `path`, expanding it and switching to all commits or to Changes when
+    /// what the pane shows lacks it.
     pub fn reveal_file(&mut self, path: &str, cx: &mut Context<Self>) {
         let Some(detail) = self.detail.clone() else {
             return;
         };
+        if self.commit.is_some() && !self.shown_files().iter().any(|p| p == path) {
+            self.show_all_commits(cx);
+        }
         self.collapsed.remove(path);
         let shown = filters::items(&detail, self.filter)
             .iter()
@@ -962,8 +925,7 @@ impl ReviewThreadView {
         }
     }
 
-    /// The pane without the inspector: its file tree, toolbar and timeline, or the
-    /// loading state.
+    /// The pane without the inspector: its toolbar and timeline, or the loading state.
     pub(crate) fn render_pane(
         &mut self,
         window: &mut Window,
@@ -980,25 +942,22 @@ impl ReviewThreadView {
                 None => self.render_loading(cx).into_any_element(),
             };
         };
-        let rem = window.rem_size();
-        h_resizable("review-panels")
-            .child(
-                resizable_panel()
-                    .visible(self.outline_visible(cx))
-                    .size(rem * 16.25)
-                    .size_range(px(180.)..px(520.))
-                    .child(self.render_outline(&detail, cx)),
-            )
-            .child(
-                resizable_panel().child(
-                    v_flex()
-                        .size_full()
-                        .min_w_0()
-                        .child(self.render_toolbar(&detail, cx))
-                        .child(self.render_timeline(window, cx)),
-                ),
-            )
+        v_flex()
+            .size_full()
+            .min_w_0()
+            .child(self.render_toolbar(&detail, cx))
+            .child(self.render_timeline(window, cx))
             .into_any_element()
+    }
+
+    /// The file and thread sidebar, drawing `tree`, once the review data has loaded.
+    pub(crate) fn render_outline_panel(
+        &mut self,
+        tree: &Entity<TreeState>,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui_kit::AnyElement> {
+        let detail = self.detail.clone()?;
+        Some(self.render_outline(&detail, tree, cx).into_any_element())
     }
 
     /// The reviewers, checks and dependencies sidebar, once the review data has loaded.

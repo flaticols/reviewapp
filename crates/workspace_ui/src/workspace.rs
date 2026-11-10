@@ -500,7 +500,7 @@ impl Workspace {
             Route::Review(panes) => {
                 let view = panes.read(cx).focused_view();
                 title_bar = title_bar
-                    .sidebar_open(view.read(cx).outline_visible(cx))
+                    .sidebar_open(review_thread_ui::ReviewLayout::get(cx).outline)
                     .title(review_thread_ui::PullRequestTitle::new(view.clone()))
                     .actions(review_thread_ui::ReviewActions::new(view))
             }
@@ -569,8 +569,8 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &app_state_ui::actions::ToggleSidebar, _, cx| {
                     // The list handles its own sidebar before the action reaches here.
-                    if let Some(review) = this.review_view(cx) {
-                        review.update(cx, |review, cx| review.toggle_outline(cx));
+                    if matches!(this.route, Route::Review(_)) {
+                        review_thread_ui::ReviewLayout::toggle_outline(cx);
                     }
                 }),
             )

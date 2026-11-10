@@ -6,11 +6,11 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     h_flex,
     list::ListItem,
-    tree::{TreeItem, tree},
+    tree::{TreeItem, TreeState, tree},
     v_flex,
 };
 use gpui_kit::{
-    Context, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
+    Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
     StatefulInteractiveElement as _, Styled as _, TestSupportExt as _, div,
     prelude::FluentBuilder as _, relative, rems,
 };
@@ -24,6 +24,7 @@ impl ReviewThreadView {
     pub(crate) fn render_outline(
         &mut self,
         detail: &PullRequestDetail,
+        tree_state: &Entity<TreeState>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let viewed = detail
@@ -35,7 +36,7 @@ impl ReviewThreadView {
 
         let view = cx.entity().downgrade();
         let menu_view = view.clone();
-        let files = tree(&self.file_tree, move |_, entry, _, _, cx| {
+        let files = tree(tree_state, move |_, entry, _, _, cx| {
             let depth = entry.depth() as f32;
             let row = ListItem::new(SharedString::from(format!("outline-{}", entry.item().id)))
                 .h(rems(1.625))
@@ -243,36 +244,6 @@ impl ReviewThreadView {
                     .children(threads),
             )
     }
-
-    /// Rebuilds the file tree when the set of changed files differs from what it shows,
-    /// keeping folders the reviewer folded.
-    pub(crate) fn sync_file_tree(&mut self, detail: &PullRequestDetail, cx: &mut Context<Self>) {
-        let paths: Vec<String> = detail.files.iter().map(|file| file.path.clone()).collect();
-        if paths == self.file_tree_paths {
-            return;
-        }
-        let folded = self.folded_dirs.clone();
-        let items = to_tree_items(&build_file_tree(&paths), &folded);
-        self.file_tree
-            .update(cx, |tree, cx| tree.set_items(items, cx));
-        self.file_tree_paths = paths;
-    }
-
-    /// Reveals the file the tree selected, by click or arrow keys, once per selection.
-    pub(crate) fn on_file_tree_changed(&mut self, cx: &mut Context<Self>) {
-        let selected = self
-            .file_tree
-            .read(cx)
-            .selected_entry()
-            .filter(|entry| !entry.is_folder())
-            .map(|entry| entry.item().id.to_string());
-        if let Some(path) = selected
-            && self.tree_revealed.as_ref() != Some(&path)
-        {
-            self.reveal_file(&path, cx);
-            self.tree_revealed = Some(path);
-        }
-    }
 }
 
 /// A folder in the changed-file tree. Chains of folders with a single subfolder and no
@@ -334,7 +305,7 @@ fn compact(dir: &mut FileTreeDir) {
     }
 }
 
-fn to_tree_items(dir: &FileTreeDir, folded: &HashSet<String>) -> Vec<TreeItem> {
+pub(crate) fn to_tree_items(dir: &FileTreeDir, folded: &HashSet<String>) -> Vec<TreeItem> {
     let dirs = dir.dirs.iter().map(|child| {
         TreeItem::new(format!("{}/", child.path), child.name.clone())
             .expanded(!folded.contains(&child.path))
