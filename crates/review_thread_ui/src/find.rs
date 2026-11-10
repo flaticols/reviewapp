@@ -14,9 +14,8 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     AnyElement, AppContext as _, Context, Entity, Focusable as _, InteractiveElement as _,
-    IntoElement,
-    ParentElement as _, SharedString, Styled as _, Subscription,
-    TestSupportExt as _, Window, div, rems,
+    IntoElement, ParentElement as _, SharedString, Styled as _, Subscription, TestSupportExt as _,
+    Window, div, rems,
 };
 use review_model::{PullRequestDetail, TimelineItem};
 
@@ -65,13 +64,17 @@ impl ReviewThreadView {
                 .placeholder("Find in pane")
                 .context_menu(false)
         });
-        let subscription = cx.subscribe(&input, |this: &mut Self, _, event: &InputEvent, cx| {
-            match event {
-                InputEvent::Change => cx.notify(),
-                InputEvent::PressEnter { shift, .. } => this.step_find(if *shift { -1 } else { 1 }, cx),
-                _ => {}
-            }
-        });
+        let subscription =
+            cx.subscribe(
+                &input,
+                |this: &mut Self, _, event: &InputEvent, cx| match event {
+                    InputEvent::Change => cx.notify(),
+                    InputEvent::PressEnter { shift, .. } => {
+                        this.step_find(if *shift { -1 } else { 1 }, cx)
+                    }
+                    _ => {}
+                },
+            );
         input.update(cx, |input, cx| input.focus(window, cx));
         self.find = Some(FindState {
             input,
@@ -119,8 +122,7 @@ impl ReviewThreadView {
         let query = find.input.read(cx).value().to_string();
         let same_query = match &find.searched {
             Some((searched, rows, data)) => {
-                if searched == &query && Rc::ptr_eq(rows, &self.rows) && Rc::ptr_eq(data, &detail)
-                {
+                if searched == &query && Rc::ptr_eq(rows, &self.rows) && Rc::ptr_eq(data, &detail) {
                     return;
                 }
                 searched == &query
@@ -263,12 +265,9 @@ impl ReviewThreadView {
                             .prefix(Icon::new(IconName::Search).small()),
                     ),
                 )
-                .children(count.map(|count| {
-                    Button::new("find-count")
-                        .ghost()
-                        .xsmall()
-                        .label(count)
-                }))
+                .children(
+                    count.map(|count| Button::new("find-count").ghost().xsmall().label(count)),
+                )
                 .child(
                     Button::new("find-previous")
                         .ghost()
