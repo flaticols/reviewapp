@@ -1,4 +1,5 @@
-//! A scripted ACP agent for tests and demos. For each prompt it reads the changed files
+//! A scripted ACP agent for tests and demos. Asked a question about selected lines, it
+//! reads their file, answers and suggests a comment. For any other prompt it reads the changed files
 //! the prompt lists, asks permission to run `cargo test`, reports one finding through
 //! the first MCP server it was given, and ends the turn. Its sessions offer a mode, a
 //! model, and an effort that only the `deep` model has, as Codex's do. The `unsupported`
@@ -126,8 +127,17 @@ fn changed_files(prompt: &str) -> Vec<String> {
         .collect()
 }
 
-/// Calls `report_finding` on a stdio MCP server, as an agent would.
-fn report_finding(server: &McpServer, path: &str, line: u32, body: &str) -> Result<(), String> {
+/// The file a question prompt asks about, from its first line: `… asks about lines 3–9
+/// of `path`.` Review prompts have no such line.
+fn question_file(prompt: &str) -> Option<String> {
+    let first = prompt.lines().next()?;
+    let (_, rest) = first.split_once(" asks about ")?;
+    let (_, path) = rest.split_once(" of `")?;
+    Some(path.split('`').next()?.to_string())
+}
+
+/// Calls tool `name` of a stdio MCP server, as an agent would.
+fn call_tool(server: &McpServer, name: &str, arguments: Value) -> Result<(), String> {
     let McpServer::Stdio(stdio) = server else {
         return Err("only stdio MCP servers are supported".into());
     };
@@ -155,13 +165,13 @@ fn report_finding(server: &McpServer, path: &str, line: u32, body: &str) -> Resu
     )?;
     call(json!({"jsonrpc":"2.0","method":"notifications/initialized"}))?;
     let result = call(
-        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"report_finding","arguments":{"path":path,"line":line,"body":body}}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":name,"arguments":arguments}}),
     )?;
     drop(stdin);
     child.wait().ok();
     match result {
         Some(response) if response["result"]["isError"] != json!(true) => Ok(()),
-        other => Err(format!("report_finding failed: {other:?}")),
+        other => Err(format!("{name} failed: {other:?}")),
     }
 }
 
@@ -236,6 +246,43 @@ fn main() {
                         let prompt = prompt_text(&request);
                         let servers: Vec<McpServer> =
                             SERVERS.lock().map(|servers| servers.clone()).unwrap_or_default();
+                        if let Some(path) = question_file(&prompt) {
+                            let read = |status| {
+                                SessionNotification::new(
+                                    session.clone(),
+                                    SessionUpdate::ToolCall(
+                                        ToolCall::new("read-question", format!("Read {path}"))
+                                            .kind(ToolKind::Read)
+                                            .status(status)
+                                            .locations(vec![ToolCallLocation::new(path.clone())]),
+                                    ),
+                                )
+                            };
+                            connection.send_notification(read(ToolCallStatus::InProgress))?;
+                            async_io::Timer::after(STEP).await;
+                            connection.send_notification(read(ToolCallStatus::Completed))?;
+                            for chunk in [
+                                "**It keeps the two orders in step.** ",
+                                "`apply_push` rebuilds `self.hunks` from the pushed commits, and the lines you selected re-anchor every open thread to its new position before the next frame reads them.\n\nWithout the second pass a thread on a moved line would point at whatever now sits at its old number.",
+                            ] {
+                                connection.send_notification(SessionNotification::new(
+                                    session.clone(),
+                                    SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                                        ContentBlock::Text(TextContent::new(chunk)),
+                                    )),
+                                ))?;
+                                async_io::Timer::after(STEP).await;
+                            }
+                            if let Some(server) = servers.first() {
+                                call_tool(
+                                    server,
+                                    "suggest_comment",
+                                    json!({ "body": "Could the re-anchoring move into `apply_push` itself, so no caller can forget it?" }),
+                                )
+                                .map_err(agent_client_protocol::util::internal_error)?;
+                            }
+                            return responder.respond(PromptResponse::new(StopReason::EndTurn));
+                        }
                         let files = changed_files(&prompt);
                         let plan = |done: usize| {
                             let steps = ["Read the changed files", "Run the tests", "Report findings"];
@@ -304,11 +351,14 @@ fn main() {
                             .await?;
                         let allowed = format!("{:?}", permission.outcome).contains("allow");
                         if let (Some(server), Some(path)) = (servers.first(), files.first()) {
-                            report_finding(
+                            call_tool(
                                 server,
-                                path,
-                                31,
-                                "Possible race: `apply_push` mutates `self.hunks` while `render` holds an iterator.",
+                                "report_finding",
+                                json!({
+                                    "path": path,
+                                    "line": 31,
+                                    "body": "Possible race: `apply_push` mutates `self.hunks` while `render` holds an iterator.",
+                                }),
                             )
                             .map_err(agent_client_protocol::util::internal_error)?;
                         }

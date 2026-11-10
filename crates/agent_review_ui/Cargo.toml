@@ -10,6 +10,7 @@ markdown_ui.workspace = true
 tool_path.workspace = true
 gpui-kit.workspace = true
 acp_client.workspace = true
+async-channel.workspace = true
 agent_registry.workspace = true
 app_state_ui.workspace = true
 diff_model.workspace = true

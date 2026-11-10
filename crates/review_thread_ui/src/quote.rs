@@ -16,7 +16,7 @@ use crate::ReviewThreadView;
 
 /// How a piece of text joins a draft at its cursor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Placement {
+pub(crate) enum Placement {
     /// A paragraph of its own, with blank lines around it.
     Block,
     /// Inside the current line, spaced from the word before it.
@@ -25,7 +25,7 @@ enum Placement {
 
 impl ReviewThreadView {
     /// Actions for a diff line in `path`, after its Copy and Copy line: commenting on
-    /// it, putting it into a comment, and its link.
+    /// it, putting it into a comment, asking an agent about it, and its link.
     pub(crate) fn diff_line_menu(
         view: &Entity<Self>,
         path: &str,
@@ -88,6 +88,16 @@ impl ReviewThreadView {
                             None => this.line_draft(&quote_path, number, window, cx),
                         };
                         this.insert_into(&input, &quoted, Placement::Block, window, cx);
+                    })
+                }),
+        );
+        let (ask_view, ask_path, position) = (view.clone(), path.clone(), target.position());
+        let menu = menu.item(
+            PopupMenuItem::new("Ask agent…")
+                .icon(Icon::new(IconName::Bot))
+                .on_click(move |_, window, cx| {
+                    ask_view.update(cx, |this, cx| {
+                        this.ask_about_line(&ask_path, position, window, cx)
                     })
                 }),
         );
@@ -180,7 +190,7 @@ impl ReviewThreadView {
     }
 
     /// The line comment being written on `line` of `path`, or a new one there.
-    fn line_draft(
+    pub(crate) fn line_draft(
         &mut self,
         path: &str,
         line: u32,
@@ -203,7 +213,7 @@ impl ReviewThreadView {
 
     /// Puts `text` into `input` at its cursor, then brings the draft on screen and
     /// focuses it so the reviewer keeps writing around it.
-    fn insert_into(
+    pub(crate) fn insert_into(
         &mut self,
         input: &Entity<TextareaState>,
         text: &str,

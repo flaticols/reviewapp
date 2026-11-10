@@ -354,11 +354,18 @@ fn cmd_f_counts_and_steps_through_matches(cx: &mut TestAppContext) {
     find_text(window, "fn ", cx);
     press_and_render(window, "enter", cx);
     let count = find_count(window, cx);
-    assert!(count.starts_with("2 of "), "Enter steps to the second match: {count}");
+    assert!(
+        count.starts_with("2 of "),
+        "Enter steps to the second match: {count}"
+    );
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
         let current = window.find("find-match-current");
-        assert!(current.visible(), "the current match is on screen: {:?}", current.bounds());
+        assert!(
+            current.visible(),
+            "the current match is on screen: {:?}",
+            current.bounds()
+        );
     })
     .unwrap();
 }
@@ -370,7 +377,11 @@ fn shift_enter_wraps_to_the_last_match(cx: &mut TestAppContext) {
     press_and_render(window, "shift-enter", cx);
     let count = find_count(window, cx);
     let total = count.rsplit(' ').next().unwrap_or_default().to_string();
-    assert_eq!(count, format!("{total} of {total}"), "⇧Enter from the first wraps to the last");
+    assert_eq!(
+        count,
+        format!("{total} of {total}"),
+        "⇧Enter from the first wraps to the last"
+    );
 }
 
 #[gpui_kit::test]
@@ -412,7 +423,10 @@ fn find_matches_comment_text(cx: &mut TestAppContext) {
     assert_eq!(find_count(window, cx), "1 of 1");
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
-        assert!(window.find("find-match-current").visible(), "the comment is outlined");
+        assert!(
+            window.find("find-match-current").visible(),
+            "the comment is outlined"
+        );
     })
     .unwrap();
 }
@@ -689,6 +703,449 @@ fn selected_diff_lines_copy_and_quote_into_a_line_comment(cx: &mut TestAppContex
         Some(format!("```rs\n{}\n```\n\nWhy both?", copied.trim_end())),
         "the selection lands as a Rust code block above the comment"
     );
+}
+
+/// Answers every agent session with `events` instead of starting an agent, and returns
+/// the prompts the sessions were given.
+fn script_agent(
+    events: impl Fn() -> Vec<acp_client::AgentEvent> + 'static,
+    cx: &mut TestAppContext,
+) -> std::rc::Rc<std::cell::RefCell<Vec<String>>> {
+    let prompts = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = prompts.clone();
+    cx.update(|cx| {
+        cx.set_global(agent_review_ui::AgentLauncher::new(move |request, _| {
+            seen.borrow_mut().push(request.prompt.clone());
+            let (sender, receiver) = async_channel::unbounded();
+            for event in events() {
+                sender.try_send(event).unwrap();
+            }
+            (receiver, None)
+        }))
+    });
+    prompts
+}
+
+#[gpui_kit::test]
+fn dragged_lines_ask_an_agent_and_its_suggestion_becomes_a_comment(cx: &mut TestAppContext) {
+    use acp_client::{AgentEvent, RunOutcome};
+    use gpui_kit::component::WindowExt as _;
+    let answer = "**Both are needed.** The loop keeps blocks the reviewer already saw.";
+    let suggestion = "Could `entry().or_insert` drop a block whose hunk changed?";
+    let prompts = script_agent(
+        move || {
+            vec![
+                AgentEvent::Connected {
+                    name: None,
+                    version: None,
+                },
+                AgentEvent::Message("**Both are needed.** ".into()),
+                AgentEvent::Message("The loop keeps blocks the reviewer already saw.".into()),
+                AgentEvent::Suggestion(suggestion.into()),
+                AgentEvent::Finished(RunOutcome::Completed),
+            ]
+        },
+        cx,
+    );
+    let (window, _) = open_featured(cx);
+    let path = "crates/review/src/thread.rs";
+
+    // From the context line above the change, over the removal, into the third added line.
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.drag_to("gutter-137-137", "gutter-0-140", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        for line in ["137-137", "138-0", "0-138", "0-139", "0-140"] {
+            assert!(
+                on_screen(window, format!("selected-{line}")),
+                "line {line} is painted as selected"
+            );
+        }
+        for line in ["136-136", "0-141"] {
+            assert!(
+                !on_screen(window, format!("selected-{line}")),
+                "line {line} is outside the drag"
+            );
+        }
+        assert_eq!(
+            window.find("ask-agent-heading").label(),
+            Some("Ask Claude Code about lines 137\u{2013}140"),
+            "the question field names the agent and the lines"
+        );
+        let heading = window.find("ask-agent-heading").bounds();
+        let last = window.find("gutter-0-140").bounds();
+        let next = window.find("gutter-0-141").bounds();
+        assert!(
+            heading.top() >= last.bottom() && heading.bottom() <= next.top(),
+            "the field sits under the last selected line: {heading:?}"
+        );
+        assert!(
+            window.has_focused_input(cx),
+            "the question field takes focus"
+        );
+        window.input("Why both passes?", cx);
+        window.press("cmd-enter", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+
+    let prompt = prompts
+        .borrow()
+        .first()
+        .cloned()
+        .expect("the agent was asked");
+    assert!(
+        prompt.contains(&format!("asks about lines 137\u{2013}140 of `{path}`")),
+        "{prompt}"
+    );
+    assert!(prompt.contains("Why both passes?"), "{prompt}");
+    assert!(
+        prompt.contains("  138       -        self.blocks = blocks.collect();"),
+        "the selection carries its numbers and signs: {prompt}"
+    );
+    assert!(
+        prompt.contains("@@ -201,6 +204,9 @@"),
+        "the file's whole change comes along: {prompt}"
+    );
+    assert!(prompt.contains("`suggest_comment`"), "{prompt}");
+
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            !on_screen(window, "selected-0-139"),
+            "asking ends the selection"
+        );
+        assert!(
+            window.try_find("ask-agent-heading").is_none(),
+            "the question field gives way to the answer"
+        );
+        let shown = window
+            .try_find("agent-answer")
+            .expect("the answer shows under the selected lines");
+        assert!(shown.visible(), "the answer is painted");
+        assert_eq!(shown.label(), Some(answer), "both chunks of the reply");
+        let suggested = window
+            .try_find("suggested-comment")
+            .expect("the suggested comment shows under the answer");
+        assert!(suggested.visible(), "the suggested comment is painted");
+        assert_eq!(suggested.label(), Some(suggestion));
+        assert!(
+            suggested.bounds().top() >= shown.bounds().bottom(),
+            "the suggestion follows the answer"
+        );
+        window.click("add-suggested-comment", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+
+    let pending = cx.update(|cx| {
+        use app_state_ui::StoresExt as _;
+        cx.stores()
+            .pull_requests()
+            .read(cx)
+            .loaded_detail(&featured())
+            .and_then(|detail| {
+                detail
+                    .threads
+                    .iter()
+                    .find(|thread| thread.path == path && thread.line == 140)
+                    .map(|thread| {
+                        (
+                            thread.comments[0].body.clone(),
+                            thread.comments[0].is_pending,
+                        )
+                    })
+            })
+    });
+    assert_eq!(
+        pending,
+        Some((suggestion.to_string(), true)),
+        "the suggestion waits in the pending review on the last selected line"
+    );
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            on_screen(window, "suggested-comment-added"),
+            "the card says the comment is in the review"
+        );
+        assert!(
+            window.try_find("add-suggested-comment").is_none(),
+            "and offers to add it only once"
+        );
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn a_click_on_a_line_number_selects_nothing_and_escape_drops_a_selection(cx: &mut TestAppContext) {
+    use gpui_kit::component::WindowExt as _;
+    let (window, _) = open_featured(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("gutter-137-137", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            !on_screen(window, "selected-137-137"),
+            "a click starts a comment, not a selection"
+        );
+        assert!(window.try_find("ask-agent-heading").is_none());
+        assert!(window.has_focused_input(cx), "the line comment has focus");
+        window.drag_to("gutter-136-136", "gutter-137-137", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            on_screen(window, "selected-136-136"),
+            "the dragged lines are painted as selected"
+        );
+        assert!(on_screen(window, "ask-agent-heading"));
+        // The first Escape leaves the field, the second drops the selection.
+        window.press("escape", cx);
+        window.press("escape", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            !on_screen(window, "selected-136-136"),
+            "Escape drops the selection"
+        );
+        assert!(window.try_find("ask-agent-heading").is_none());
+        assert!(
+            on_screen(window, "gutter-136-136"),
+            "and the review stays open"
+        );
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn the_split_layout_selects_lines_of_the_side_that_was_dragged(cx: &mut TestAppContext) {
+    let (window, _) = open_featured(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(("diff-mode", 1usize), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.drag_to("split-new-138", "split-new-140", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        for line in ["new-138", "new-139", "new-140"] {
+            assert!(
+                on_screen(window, format!("selected-{line}")),
+                "head line {line} is painted as selected"
+            );
+        }
+        assert!(
+            !on_screen(window, "selected-old-138"),
+            "the removal beside the first line isn't part of the drag"
+        );
+        assert_eq!(
+            window.find("ask-agent-heading").label(),
+            Some("Ask Claude Code about lines 138\u{2013}140")
+        );
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn a_drag_released_outside_the_diff_still_ends(cx: &mut TestAppContext) {
+    let (window, _) = open_featured(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let from = window.find("gutter-136-136").bounds().center();
+        let outside = window.find("toggle-inspector").bounds().center();
+        // Let go over the title bar, outside the timeline.
+        window.drag(from, outside, cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        // With the drag over, crossing a line with the button held selects nothing.
+        let later = window.find("gutter-0-139").bounds().center();
+        window.drag(gpui_kit::point(later.x + px(300.), later.y), later, cx);
+        window.render_frame(cx);
+        assert!(
+            !on_screen(window, "selected-0-139"),
+            "a drag that ended outside the diff isn't still extending"
+        );
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn ask_agent_in_the_line_menu_asks_about_that_line(cx: &mut TestAppContext) {
+    let (window, _) = open_featured(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.right_click("gutter-137-137", cx);
+    })
+    .unwrap();
+    // Copy, Copy line, separator, Comment on line, Suggest change, Quote in comment,
+    // Ask agent….
+    pick_menu_item(window, 6, cx);
+    cx.update_window(window, |_, window, cx| {
+        use gpui_kit::component::WindowExt as _;
+        window.render_frame(cx);
+        assert!(
+            on_screen(window, "selected-137-137"),
+            "the line the menu was opened on is selected"
+        );
+        assert!(!on_screen(window, "selected-136-136"));
+        assert_eq!(
+            window.find("ask-agent-heading").label(),
+            Some("Ask Claude Code about line 137")
+        );
+        assert!(window.has_focused_input(cx), "the question field has focus");
+    })
+    .unwrap();
+}
+
+/// Drags over two lines and asks `question` about them.
+fn ask_about_two_lines(window: AnyWindowHandle, question: &str, cx: &mut TestAppContext) {
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.drag_to("gutter-136-136", "gutter-137-137", cx);
+        window.render_frame(cx);
+        window.input(question, cx);
+        window.press("cmd-enter", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn a_question_stops_its_suggestion_opens_as_a_draft_and_the_card_dismisses(
+    cx: &mut TestAppContext,
+) {
+    use acp_client::AgentEvent;
+    use gpui_kit::component::WindowExt as _;
+    // No end of turn: the agent is still at work after suggesting.
+    script_agent(
+        || {
+            vec![
+                AgentEvent::Connected {
+                    name: None,
+                    version: None,
+                },
+                AgentEvent::Message("Still looking.".into()),
+                AgentEvent::Suggestion("Name the pass.".into()),
+            ]
+        },
+        cx,
+    );
+    let (window, _) = open_featured(cx);
+    ask_about_two_lines(window, "Why?", cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            on_screen(window, "stop-question"),
+            "a question in progress offers Stop"
+        );
+        assert!(window.try_find("dismiss-question").is_none());
+        window.click("stop-question", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window.try_find("stop-question").is_none(),
+            "a stopped question no longer offers Stop"
+        );
+        assert!(on_screen(window, "dismiss-question"));
+        assert!(
+            on_screen(window, "agent-answer"),
+            "what it answered before the stop stays"
+        );
+        window.click("edit-suggested-comment", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window.has_focused_input(cx),
+            "Edit opens the suggestion as a line comment draft"
+        );
+        window.input(" Please.", cx);
+        window.press("cmd-enter", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let body = cx.update(|cx| {
+        use app_state_ui::StoresExt as _;
+        cx.stores()
+            .pull_requests()
+            .read(cx)
+            .loaded_detail(&featured())
+            .and_then(|detail| {
+                detail
+                    .threads
+                    .iter()
+                    .find(|thread| thread.line == 137 && thread.comments[0].is_pending)
+                    .map(|thread| thread.comments[0].body.clone())
+            })
+    });
+    assert_eq!(
+        body.as_deref(),
+        Some("Name the pass. Please."),
+        "the edited suggestion is the comment"
+    );
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("dismiss-question", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window.try_find("agent-answer").is_none(),
+            "Dismiss removes the card"
+        );
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn a_question_that_fails_says_why(cx: &mut TestAppContext) {
+    use acp_client::AgentEvent;
+    script_agent(
+        || vec![AgentEvent::Failed("The agent isn’t signed in.".into())],
+        cx,
+    );
+    let (window, _) = open_featured(cx);
+    ask_about_two_lines(window, "Why?", cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let failed = window
+            .try_find("agent-question-failed")
+            .expect("the failure shows on the card");
+        assert!(failed.visible());
+        assert_eq!(failed.label(), Some("The agent isn’t signed in."));
+        assert!(on_screen(window, "dismiss-question"));
+        assert!(window.try_find("suggested-comment").is_none());
+    })
+    .unwrap();
 }
 
 #[gpui_kit::test]

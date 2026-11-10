@@ -125,6 +125,7 @@ impl ReviewThreadView {
             {
                 anchored.insert(*line);
             }
+            anchored.extend(self.ask_anchors(path, cx));
             let file_rows = diff_rows(file, self.mode, self.collapsed.contains(path), |line| {
                 anchored.contains(&line)
             });

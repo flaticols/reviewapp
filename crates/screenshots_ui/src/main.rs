@@ -57,6 +57,10 @@ enum Scene {
     FindInPane,
     /// The thread with the right sidebar hidden to its strip of check icons.
     InspectorHidden,
+    /// Lines selected by their numbers, with the question to an agent being written.
+    AskLines,
+    /// An agent's answer about selected lines, with the comment it suggests.
+    AskAnswer,
     Submit,
     StartAgent,
     CheckLog,
@@ -80,7 +84,7 @@ enum Scene {
 }
 
 impl Scene {
-    const ALL: [Scene; 34] = [
+    const ALL: [Scene; 36] = [
         Self::List,
         Self::OneCommit,
         Self::RowMenu,
@@ -100,6 +104,8 @@ impl Scene {
         Self::SplitPanes,
         Self::FindInPane,
         Self::InspectorHidden,
+        Self::AskLines,
+        Self::AskAnswer,
         Self::Submit,
         Self::StartAgent,
         Self::CheckLog,
@@ -138,6 +144,8 @@ impl Scene {
             Self::SplitPanes => "02m-split-panes",
             Self::FindInPane => "02n-find-in-pane",
             Self::InspectorHidden => "02o-inspector-hidden",
+            Self::AskLines => "02p-ask-lines",
+            Self::AskAnswer => "02q-ask-answer",
             Self::Submit => "03-submit",
             Self::StartAgent => "05a-start-agent",
             Self::CheckLog => "04-check-log",
@@ -155,6 +163,31 @@ impl Scene {
             Self::LiveReview => "09-live-review",
         }
     }
+}
+
+/// What the agent of the ask scenes sends: an answer in two chunks around a file read,
+/// then the comment it suggests.
+fn asked_events() -> Vec<acp_client::AgentEvent> {
+    use acp_client::{AgentEvent, RunOutcome};
+    vec![
+        AgentEvent::Connected {
+            name: None,
+            version: None,
+        },
+        AgentEvent::Message(
+            "**So a push doesn't reset what you've read.** The old line replaced `self.blocks` wholesale, which dropped every block's viewed and collapsed state each time the author pushed."
+                .into(),
+        ),
+        AgentEvent::Message(
+            "\n\nThe loop keys each block by its path and hunk hash and only inserts the ones that aren't there yet:\n\n- an untouched hunk keeps its entry, and with it your place;\n- a changed hunk hashes differently, so it comes in as a new block;\n- nothing removes the entry of a hunk that no longer exists, so `self.blocks` only grows.\n\n`reanchor_threads` at `crates/review/src/thread.rs:204` then walks every entry, stale ones included."
+                .into(),
+        ),
+        AgentEvent::Suggestion(
+            "Blocks whose hunk is gone after a push stay in `self.blocks`. Should this retain only the keys in the new push?"
+                .into(),
+        ),
+        AgentEvent::Finished(RunOutcome::Completed),
+    ]
 }
 
 fn featured() -> PullRequestKey {
@@ -308,6 +341,8 @@ fn render(
                 | Scene::Markdown
                 | Scene::Unresolved
                 | Scene::ThreadFirstFile
+                | Scene::AskLines
+                | Scene::AskAnswer
                 | Scene::SplitPanes
                 | Scene::GoToFile
                 | Scene::FindInPane
@@ -363,6 +398,34 @@ fn render(
             window.press("cmd-f", cx);
             window.render_frame(cx);
             window.input("fn ", cx);
+        }
+        Scene::AskLines | Scene::AskAnswer => {
+            use gpui_kit::test::TestWindowExt as _;
+            cx.set_global(agent_review_ui::AgentLauncher::new(|_, _| {
+                let (sender, receiver) = async_channel::unbounded();
+                for event in asked_events() {
+                    sender.try_send(event).ok();
+                }
+                (receiver, None)
+            }));
+            if let Some(review) = workspace.read(cx).review_view(cx) {
+                review.update(cx, |review, cx| {
+                    let first = review
+                        .detail()
+                        .and_then(|detail| detail.files.first())
+                        .map(|file| file.path.clone());
+                    if let Some(path) = first {
+                        review.reveal_file(&path, cx);
+                    }
+                });
+            }
+            window.render_frame(cx);
+            window.drag_to("gutter-137-137", "gutter-0-140", cx);
+            window.render_frame(cx);
+            window.input("Why keep the blocks the reviewer already saw?", cx);
+            if scene == Scene::AskAnswer {
+                window.press("cmd-enter", cx);
+            }
         }
         Scene::GoToFile => {
             use gpui_kit::test::TestWindowExt as _;

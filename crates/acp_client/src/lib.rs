@@ -12,7 +12,10 @@ mod session;
 
 pub use findings::ReportedFinding;
 pub use options::{AgentSetting, SessionChoices, SettingChoice, SettingKind, probe_settings};
-pub use prompt::{PromptInput, ReviewDepth, ReviewScope, review_prompt, unified_patch};
+pub use prompt::{
+    PromptInput, QuestionInput, ReviewDepth, ReviewScope, question_prompt, review_prompt,
+    unified_patch,
+};
 pub use session::{
     AgentEvent, Decision, PermissionChoice, PermissionPrompt, PlanStatus, PlanStep, ReviewRequest,
     RunControl, RunOutcome, ToolActivity, ToolKind, ToolStatus, readable_error, start_review,

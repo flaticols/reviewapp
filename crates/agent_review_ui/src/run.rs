@@ -260,9 +260,8 @@ impl AgentRun {
             request.choices,
             request.prompt
         ));
-        let (future, events, control) = acp_client::start_review(request);
-        cx.background_spawn(future).detach();
-        self.control = Some(control);
+        let (events, control) = crate::launcher::launch(request, cx);
+        self.control = control;
         self._events = Some(cx.spawn(async move |this, cx| {
             while let Ok(event) = events.recv().await {
                 let finished = matches!(event, AgentEvent::Finished(_) | AgentEvent::Failed(_));
@@ -374,19 +373,7 @@ impl AgentRun {
         let Some(prompt) = self.permission.take() else {
             return;
         };
-        if decision == Decision::AllowAlways
-            && let Some(command) = prompt.command().map(str::to_string)
-        {
-            let repository = self.repository.clone();
-            cx.stores().settings().clone().update(cx, |settings, cx| {
-                settings.update_preferences(cx, |preferences| {
-                    preferences
-                        .always_allowed_commands
-                        .push((repository, command))
-                })
-            });
-        }
-        prompt.respond(decision);
+        crate::permission::answer(prompt, decision, &self.repository, cx);
         self.state = RunState::Running;
         cx.notify();
     }
@@ -557,6 +544,8 @@ impl AgentRun {
                     .clone()
                     .update(cx, |store, cx| store.add_finding(&key, finding, cx));
             }
+            // Only a question about selected lines asks for a comment.
+            AgentEvent::Suggestion(_) => {}
             AgentEvent::Finished(outcome) => self.finish(outcome, cx),
             AgentEvent::Failed(message) => {
                 self.permission = None;
@@ -573,20 +562,10 @@ impl AgentRun {
     }
 
     fn ask(&mut self, prompt: PermissionPrompt, cx: &mut Context<Self>) {
-        let preferences = cx.stores().settings().read(cx).preferences().clone();
-        let remembered = prompt
-            .command()
-            .is_some_and(|command| preferences.is_command_allowed(&self.repository, command));
-        if !preferences.ask_before_commands || remembered {
-            prompt.respond(if remembered {
-                Decision::AllowAlways
-            } else {
-                Decision::AllowOnce
-            });
-            return;
+        if let Some(prompt) = crate::permission::screen(prompt, &self.repository, cx) {
+            self.permission = Some(prompt);
+            self.state = RunState::AwaitingPermission;
         }
-        self.permission = Some(prompt);
-        self.state = RunState::AwaitingPermission;
     }
 
     fn finish(&mut self, outcome: RunOutcome, cx: &mut Context<Self>) {

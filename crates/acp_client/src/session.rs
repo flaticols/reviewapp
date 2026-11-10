@@ -163,13 +163,15 @@ pub enum AgentEvent {
     Permission(PermissionPrompt),
     /// The agent reported a finding through the findings tool.
     Finding(ReportedFinding),
+    /// The comment the agent proposes for the lines it was asked about.
+    Suggestion(String),
     /// The run ended.
     Finished(RunOutcome),
     /// The run failed; the message explains why.
     Failed(String),
 }
 
-/// One review run.
+/// One agent session: a review, or a question about selected lines.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct ReviewRequest {
@@ -338,6 +340,7 @@ async fn run(
         listener.forward(move |report| {
             let event = match report {
                 Report::Finding(finding) => AgentEvent::Finding(finding),
+                Report::Suggestion { body } => AgentEvent::Suggestion(body),
                 Report::Plan { steps } => AgentEvent::Plan(
                     steps
                         .into_iter()
@@ -570,13 +573,17 @@ async fn run(
 /// command run in `~/.switchfold/review-worktrees`, must still ask the reviewer.
 fn is_own_tool(title: &str) -> bool {
     let title = title.trim();
-    [crate::findings::TOOL_NAME, crate::findings::PLAN_TOOL_NAME]
-        .iter()
-        .any(|tool| {
-            title == format!("Tool: switchfold/{tool}")
-                || title == format!("switchfold/{tool}")
-                || title == format!("mcp__switchfold__{tool}")
-        })
+    [
+        crate::findings::TOOL_NAME,
+        crate::findings::PLAN_TOOL_NAME,
+        crate::findings::SUGGEST_TOOL_NAME,
+    ]
+    .iter()
+    .any(|tool| {
+        title == format!("Tool: switchfold/{tool}")
+            || title == format!("switchfold/{tool}")
+            || title == format!("mcp__switchfold__{tool}")
+    })
 }
 
 /// The human part of an agent error. Agents wrap API errors in JSON, sometimes twice:
@@ -615,6 +622,7 @@ mod tests {
     fn switchfold_tools_are_recognised_by_title() {
         assert!(is_own_tool("Tool: switchfold/report_finding"));
         assert!(is_own_tool("mcp__switchfold__update_plan"));
+        assert!(is_own_tool("mcp__switchfold__suggest_comment"));
         assert!(!is_own_tool("Run cargo test"));
         assert!(!is_own_tool(
             "cd /Users/me/.switchfold/review-worktrees/app-pr-7 && rm -rf ~"

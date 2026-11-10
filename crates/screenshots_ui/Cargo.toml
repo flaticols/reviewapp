@@ -11,6 +11,7 @@ triage_ui.workspace = true
 gpui-kit = { workspace = true, features = ["test-support"] }
 agent_review_ui.workspace = true
 acp_client.workspace = true
+async-channel.workspace = true
 pr_actions_ui.workspace = true
 app_state_ui.workspace = true
 anyhow.workspace = true

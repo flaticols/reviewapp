@@ -16,9 +16,8 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Entity, FontWeight, InteractiveElement as _,
-    IntoElement, ParentElement as _, SharedString, Styled as _, TestSupportExt as _, Window,
-    div, list,
-    prelude::FluentBuilder as _,
+    IntoElement, MouseButton, MouseMoveEvent, ParentElement as _, SharedString, Styled as _,
+    TestSupportExt as _, Window, div, list, prelude::FluentBuilder as _,
 };
 use pr_model::Timestamp;
 use review_model::{
@@ -162,6 +161,19 @@ impl ReviewThreadView {
             .id("timeline")
             .flex_1()
             .min_h_0()
+            .capture_any_mouse_up(
+                cx.listener(|this, _, window, cx| this.finish_line_selection(window, cx)),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| this.finish_line_selection(window, cx)),
+            )
+            // A button released outside the window sends no mouse-up here.
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                if event.pressed_button.is_none() {
+                    this.finish_line_selection(window, cx)
+                }
+            }))
             .child(
                 list(
                     self.list_state.clone(),
@@ -383,6 +395,7 @@ impl ReviewThreadView {
             .last(last)
             .collapsed(self.collapsed.contains(path))
             .viewed(detail.is_viewed(path))
+            .selected_lines(self.selected_lines(path))
             .document_order(row_ix as u64);
         if let Some(query) = self.find_query(cx) {
             let current = self.current_match().and_then(|found| match &found.place {
@@ -421,7 +434,13 @@ impl ReviewThreadView {
                 let comment_path = path.to_string();
                 let view = cx.entity();
                 let (menu_view, menu_path) = (view.clone(), path.to_string());
+                let (select_view, select_path) = (view.clone(), path.to_string());
                 element = element
+                    .on_select_line(move |position, gesture, _, cx| {
+                        select_view.update(cx, |this, cx| {
+                            this.select_line(&select_path, position, gesture, cx)
+                        })
+                    })
                     .on_comment_line(move |line, window, cx| {
                         let path = comment_path.clone();
                         view.update(cx, |this, cx| {
@@ -433,12 +452,14 @@ impl ReviewThreadView {
                     });
             }
             DiffRow::Threads(line) => {
-                let mut threads: Vec<AnyElement> = detail
-                    .threads
-                    .iter()
-                    .filter(|thread| thread.path == path && thread.line == line)
-                    .map(|thread| self.render_thread(thread, now, window, cx))
-                    .collect();
+                let mut threads = self.render_questions(path, line, cx);
+                threads.extend(
+                    detail
+                        .threads
+                        .iter()
+                        .filter(|thread| thread.path == path && thread.line == line)
+                        .map(|thread| self.render_thread(thread, now, window, cx)),
+                );
                 if let Some((new_path, new_line, input)) = &self.new_thread
                     && new_path == path
                     && *new_line == line
@@ -453,6 +474,7 @@ impl ReviewThreadView {
                         cx,
                     ));
                 }
+                threads.extend(self.render_ask_field(path, line, cx));
                 element = element.threads(threads);
             }
             DiffRow::Hunk(_) | DiffRow::Binary => {}
@@ -596,7 +618,7 @@ impl ReviewThreadView {
 
     /// A bordered multi-line editor with Cancel and a submit button, like the comment
     /// composer. Cancel clears the text and leaves the field, then runs `on_cancel`.
-    fn render_editor(
+    pub(crate) fn render_editor(
         &self,
         id: impl Into<SharedString>,
         input: &Entity<TextareaState>,

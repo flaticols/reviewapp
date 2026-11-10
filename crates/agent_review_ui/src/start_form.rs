@@ -512,7 +512,7 @@ pub fn start_review(
 
 /// The agent's command line with its launcher resolved: an app opened from Finder has
 /// a minimal PATH.
-fn launch_command(agent: &AgentConfig) -> String {
+pub(crate) fn launch_command(agent: &AgentConfig) -> String {
     let mut agent = agent.clone();
     if let Some(program) = tool_path::find_on_path(&agent.command) {
         agent.command = program.display().to_string();
@@ -532,7 +532,7 @@ fn pick(setting: &AgentSetting, saved: Option<&str>) -> String {
 /// The worktree an agent reviewing `key` works in: the head commit checked out from
 /// the mapped clone under `~/.switchfold/review-worktrees`. `None` without a clone, or
 /// before the commits load.
-fn review_tree_for(
+pub(crate) fn review_tree_for(
     key: &PullRequestKey,
     detail: &PullRequestDetail,
     cx: &App,
@@ -570,7 +570,7 @@ fn workspace_label(key: &PullRequestKey, cx: &App) -> String {
     }
 }
 
-fn write_diff_folder(
+pub(crate) fn write_diff_folder(
     key: &PullRequestKey,
     files: &[&diff_model::FileDiff],
 ) -> std::io::Result<PathBuf> {

@@ -2,10 +2,11 @@
 //! one at a time: a header with the path, counts, Viewed and Open in Zed, then hunk
 //! headers and lines in unified or split layout with syntax colors, a two-number gutter,
 //! and slots for the threads anchored to lines. Consecutive rows of a file draw as one
-//! bordered card.
+//! bordered card. Dragging across line numbers selects a range of lines.
 
 mod layout;
 mod selectable_code;
+mod selection;
 
 use std::ops::Range;
 use std::rc::Rc;
@@ -23,8 +24,8 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     AnyElement, App, ClickEvent, ClipboardItem, ElementId, FontWeight, HighlightStyle, Hsla,
-    InteractiveElement as _, IntoElement, ParentElement as _, RenderOnce, SharedString,
-    StatefulInteractiveElement as _, Styled as _, TestSupportExt as _, Window, div,
+    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, RenderOnce,
+    SharedString, StatefulInteractiveElement as _, Styled as _, TestSupportExt as _, Window, div,
     prelude::FluentBuilder as _, rems,
 };
 use selectable_code::SelectableCode;
@@ -32,6 +33,7 @@ use syntax_ui::FileHighlights;
 use theme_ui::{ActiveAppTheme as _, TypographyExt as _, code_line_height};
 
 pub use layout::{SplitRow, split_rows};
+pub use selection::{LineGesture, LinePosition, LineRange};
 
 /// Unified shows one column; split shows the base on the left and the head on the right.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -47,6 +49,7 @@ pub const COLLAPSE_THRESHOLD: usize = 100;
 type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 type ViewedHandler = Rc<dyn Fn(&bool, &mut Window, &mut App)>;
 type LineHandler = Rc<dyn Fn(u32, &mut Window, &mut App)>;
+type SelectHandler = Rc<dyn Fn(LinePosition, LineGesture, &mut Window, &mut App)>;
 type MenuBuilder = Rc<dyn Fn(PopupMenu, &mut Window, &mut App) -> PopupMenu>;
 type LineMenuBuilder = Rc<dyn Fn(PopupMenu, &LineMenuTarget, &mut Window, &mut App) -> PopupMenu>;
 type Spans = [(std::ops::Range<usize>, gpui_kit::HighlightStyle)];
@@ -73,6 +76,7 @@ pub enum DiffSide {
 #[derive(Clone, Debug)]
 pub struct LineMenuTarget {
     line: DiffLine,
+    position: LinePosition,
     side: DiffSide,
     selected_text: String,
 }
@@ -81,6 +85,11 @@ impl LineMenuTarget {
     /// The line, with its raw text: tabs as written, no sign.
     pub fn line(&self) -> &DiffLine {
         &self.line
+    }
+
+    /// Where the line sits in the file's diff.
+    pub fn position(&self) -> LinePosition {
+        self.position
     }
 
     /// The version of the file the line was clicked in.
@@ -193,6 +202,8 @@ pub struct FileDiffRow {
     on_comment_line: Option<LineHandler>,
     menu: Option<MenuBuilder>,
     line_menu: Option<LineMenuBuilder>,
+    on_select_line: Option<SelectHandler>,
+    selected: Option<LineRange>,
     document_order: u64,
     find: Option<Find>,
 }
@@ -249,6 +260,8 @@ impl FileDiffRow {
             on_comment_line: None,
             menu: None,
             line_menu: None,
+            on_select_line: None,
+            selected: None,
             document_order: 0,
             find: None,
         }
@@ -348,6 +361,23 @@ impl FileDiffRow {
         handler: impl Fn(u32, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_comment_line = Some(Rc::new(handler));
+        self
+    }
+
+    /// Handles the gestures that select lines: a press on a line's numbers, and the
+    /// pointer crossing lines with the button held. The owner keeps the range and ends
+    /// the drag when the button comes up, wherever that happens.
+    pub fn on_select_line(
+        mut self,
+        handler: impl Fn(LinePosition, LineGesture, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_select_line = Some(Rc::new(handler));
+        self
+    }
+
+    /// Paints the lines of `range` as selected.
+    pub fn selected_lines(mut self, range: Option<LineRange>) -> Self {
+        self.selected = range;
         self
     }
 
@@ -457,9 +487,13 @@ impl FileDiffRow {
             .context_menu(move |menu, window, cx| menu_for_context(&context, menu, window, cx))
     }
 
-    fn line_actions(&self, side: DiffSide) -> LineActions {
+    fn line_actions(&self, side: DiffSide, hunk: usize, line: Option<usize>) -> LineActions {
+        let position = LinePosition::new(hunk, line.unwrap_or_default());
         LineActions {
             side,
+            position,
+            selected: line.is_some() && self.selected.is_some_and(|range| range.contains(position)),
+            on_select: self.on_select_line.clone(),
             on_comment_line: match side {
                 DiffSide::Base => None,
                 DiffSide::Head => self.on_comment_line.clone(),
@@ -532,21 +566,25 @@ impl RenderOnce for FileDiffRow {
             DiffRow::Line { hunk, line } => unified_line(
                 &file.hunks[hunk].lines[line],
                 &self.spans(hunk, line, cx),
-                self.line_actions(DiffSide::Head),
+                self.line_actions(DiffSide::Head, hunk, Some(line)),
                 cx,
             )
             .into_any_element(),
             DiffRow::Split { hunk, left, right } => {
                 let lines = &file.hunks[hunk].lines;
+                let base_actions = self.line_actions(DiffSide::Base, hunk, left);
+                let head_actions = self.line_actions(DiffSide::Head, hunk, right);
                 let left = left.map(|ix| (&lines[ix], self.spans(hunk, ix, cx)));
                 let right = right.map(|ix| (&lines[ix], self.spans(hunk, ix, cx)));
                 let left = left.as_ref().map(|(line, spans)| (*line, spans.as_slice()));
-                let right = right.as_ref().map(|(line, spans)| (*line, spans.as_slice()));
+                let right = right
+                    .as_ref()
+                    .map(|(line, spans)| (*line, spans.as_slice()));
                 h_flex()
                     .items_stretch()
-                    .child(split_side(left, self.line_actions(DiffSide::Base), cx))
+                    .child(split_side(left, base_actions, cx))
                     .child(div().w_px().bg(cx.theme().border))
-                    .child(split_side(right, self.line_actions(DiffSide::Head), cx))
+                    .child(split_side(right, head_actions, cx))
                     .into_any_element()
             }
             DiffRow::Threads(_) => {
@@ -660,16 +698,49 @@ fn code_cell(text: &str, spans: &Spans, document_order: u64, cx: &App) -> impl I
         .child(SelectableCode::new("code", text, spans).document_order(document_order))
 }
 
-/// What a code line offers besides its text: commenting from the gutter, the context
-/// menu, and its place in the selection order.
+/// What a code line offers besides its text: commenting and selecting from the gutter,
+/// the context menu, and its place in the text selection order.
 struct LineActions {
     side: DiffSide,
+    position: LinePosition,
+    selected: bool,
+    on_select: Option<SelectHandler>,
     on_comment_line: Option<LineHandler>,
     menu: Option<LineMenuBuilder>,
     document_order: u64,
 }
 
 impl LineActions {
+    /// Reports a press on the line's numbers, which anchors a selection or, with Shift,
+    /// extends the one there is.
+    fn press(&self) -> Option<impl Fn(&gpui_kit::MouseDownEvent, &mut Window, &mut App) + 'static> {
+        let (select, position) = (self.on_select.clone()?, self.position);
+        Some(
+            move |event: &gpui_kit::MouseDownEvent, window: &mut Window, cx: &mut App| {
+                let gesture = if event.modifiers.shift {
+                    LineGesture::ShiftPress
+                } else {
+                    LineGesture::Press
+                };
+                select(position, gesture, window, cx)
+            },
+        )
+    }
+
+    /// Reports the pointer crossing the line with the button held.
+    fn drag_over(
+        &self,
+    ) -> Option<impl Fn(&gpui_kit::MouseMoveEvent, &mut Window, &mut App) + 'static> {
+        let (select, position) = (self.on_select.clone()?, self.position);
+        Some(
+            move |event: &gpui_kit::MouseMoveEvent, window: &mut Window, cx: &mut App| {
+                if event.pressed_button == Some(MouseButton::Left) {
+                    select(position, LineGesture::DragOver, window, cx)
+                }
+            },
+        )
+    }
+
     /// The line's context menu: Copy and Copy line, then the owner's actions.
     fn context_menu(
         &self,
@@ -677,10 +748,12 @@ impl LineActions {
     ) -> impl Fn(PopupMenu, &mut Window, &mut gpui_kit::Context<PopupMenu>) -> PopupMenu + 'static
     {
         let (line, side, extra) = (line.clone(), self.side, self.menu.clone());
+        let position = self.position;
         move |menu, window, cx| {
             // Read now: the press on a menu item clears the selection before its handler.
             let target = LineMenuTarget {
                 line: line.clone(),
+                position,
                 side,
                 selected_text: TextSelection::selected_text(window, cx),
             };
@@ -728,23 +801,39 @@ fn unified_line(
         },
         ..actions
     };
+    let numbers = format!(
+        "{}-{}",
+        line.old_line.unwrap_or(0),
+        line.new_line.unwrap_or(0)
+    );
+    let gutter = if actions.selected {
+        cx.theme().selection
+    } else {
+        gutter
+    };
     h_flex()
         .id("line")
         .group(LINE_GROUP)
+        .relative()
         .h(code_line_height(cx))
         .bg(background)
+        .when(actions.selected, |this| {
+            this.child(selection_fill(format!("selected-{numbers}"), cx))
+        })
+        .when_some(actions.drag_over(), |this, select| {
+            this.on_mouse_move(select)
+        })
         .child(
             h_flex()
-                .id(SharedString::from(format!(
-                    "gutter-{}-{}",
-                    line.old_line.unwrap_or(0),
-                    line.new_line.unwrap_or(0)
-                )))
+                .id(SharedString::from(format!("gutter-{numbers}")))
                 .relative()
                 .h_full()
                 .w(gutter_width())
                 .flex_shrink_0()
                 .bg(gutter)
+                .when_some(actions.press(), |this, select| {
+                    this.on_mouse_down(MouseButton::Left, select)
+                })
                 .child(number_cell(line.old_line, cx))
                 .child(number_cell(line.new_line, cx))
                 .child(
@@ -762,10 +851,12 @@ fn unified_line(
                         this.cursor_pointer()
                             .hover(|style| style.bg(cx.app_theme().diff_hunk))
                             .tooltip(|window, cx| {
-                                gpui_kit::component::tooltip::Tooltip::new("Comment on this line")
-                                    .build(window, cx)
+                                gpui_kit::component::tooltip::Tooltip::new(
+                                    "Click to comment, drag to select lines",
+                                )
+                                .build(window, cx)
                             })
-                            .on_click(move |_, window, cx| handler(number, window, cx))
+                            .on_click(comment_click(number, handler))
                     },
                 )
                 .test_support(),
@@ -797,25 +888,41 @@ fn split_side(
     let comment_line = (!old_side).then_some(line.new_line).flatten();
     let on_comment_line = actions.on_comment_line.clone();
     let commentable = comment_line.is_some() && on_comment_line.is_some();
+    let numbers = format!(
+        "{}-{}",
+        if old_side { "old" } else { "new" },
+        number.unwrap_or(0)
+    );
+    let gutter = if actions.selected {
+        cx.theme().selection
+    } else {
+        gutter
+    };
     h_flex()
         .id(if old_side { "line-base" } else { "line-head" })
         .group(LINE_GROUP)
+        .relative()
         .flex_1()
         .min_w_0()
         .h(code_line_height(cx))
         .bg(background)
+        .when(actions.selected, |this| {
+            this.child(selection_fill(format!("selected-{numbers}"), cx))
+        })
+        .when_some(actions.drag_over(), |this, select| {
+            this.on_mouse_move(select)
+        })
         .child(
             h_flex()
-                .id(SharedString::from(format!(
-                    "split-{}-{}",
-                    if old_side { "old" } else { "new" },
-                    number.unwrap_or(0)
-                )))
+                .id(SharedString::from(format!("split-{numbers}")))
                 .relative()
                 .h_full()
                 .w(rems(3.5))
                 .flex_shrink_0()
                 .bg(gutter)
+                .when_some(actions.press(), |this, select| {
+                    this.on_mouse_down(MouseButton::Left, select)
+                })
                 .child(number_cell(number, cx))
                 .child(
                     div()
@@ -830,7 +937,7 @@ fn split_side(
                     comment_line.zip(on_comment_line),
                     |this, (number, handler)| {
                         this.cursor_pointer()
-                            .on_click(move |_, window, cx| handler(number, window, cx))
+                            .on_click(comment_click(number, handler))
                     },
                 )
                 .test_support(),
@@ -838,6 +945,32 @@ fn split_side(
         .child(code_cell(&line.text, spans, actions.document_order, cx))
         .context_menu(actions.context_menu(line))
         .into_any_element()
+}
+
+/// A click on a line's numbers starts a comment there. A Shift-click extends the
+/// selection instead, so it starts none.
+fn comment_click(
+    number: u32,
+    handler: LineHandler,
+) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
+    move |event, window, cx| {
+        if !event.modifiers().shift {
+            handler(number, window, cx)
+        }
+    }
+}
+
+/// The fill behind a selected line, under its numbers and code.
+fn selection_fill(id: String, cx: &App) -> impl IntoElement {
+    div()
+        .id(SharedString::from(id))
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .left_0()
+        .right_0()
+        .bg(cx.theme().selection)
+        .test_support()
 }
 
 /// Columns between tab stops when a tab is expanded.

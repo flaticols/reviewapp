@@ -1,4 +1,5 @@
-//! Switchfold's MCP tools for agents: `report_finding` and `update_plan`. The agent
+//! Switchfold's MCP tools for agents: `report_finding`, `update_plan` and
+//! `suggest_comment`. The agent
 //! launches Switchfold's binary as a stdio MCP server ([`serve_stdio`]); each tool call
 //! is forwarded over a Unix socket to the running app, which listens with
 //! [`FindingsListener`].
@@ -39,6 +40,10 @@ pub enum Report {
     Plan {
         steps: Vec<ReportedStep>,
     },
+    /// The comment an agent proposes after answering a question about selected lines.
+    Suggestion {
+        body: String,
+    },
 }
 
 /// The tool agents call to report a finding.
@@ -46,6 +51,9 @@ pub const TOOL_NAME: &str = "report_finding";
 
 /// The tool agents call to share their plan.
 pub const PLAN_TOOL_NAME: &str = "update_plan";
+
+/// The tool agents call to propose a comment on the lines they were asked about.
+pub const SUGGEST_TOOL_NAME: &str = "suggest_comment";
 
 /// The MCP protocol version the server speaks.
 const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -136,7 +144,7 @@ fn handle(message: &Value, send: impl Fn(&Report) -> Result<(), String>) -> Opti
             "serverInfo": { "name": "switchfold", "version": env!("CARGO_PKG_VERSION") },
         }),
         "ping" => json!({}),
-        "tools/list" => json!({ "tools": [finding_tool(), plan_tool()] }),
+        "tools/list" => json!({ "tools": [finding_tool(), plan_tool(), suggestion_tool()] }),
         "tools/call" => {
             let params = message.get("params").cloned().unwrap_or(Value::Null);
             let name = params
@@ -157,6 +165,13 @@ fn handle(message: &Value, send: impl Fn(&Report) -> Result<(), String>) -> Opti
                             .map_err(|problem| problem.to_string())
                     })
                     .map(|steps| Report::Plan { steps }),
+                SUGGEST_TOOL_NAME => arguments
+                    .get("body")
+                    .and_then(Value::as_str)
+                    .map(|body| Report::Suggestion {
+                        body: body.trim().to_string(),
+                    })
+                    .ok_or_else(|| "`body` is required".to_string()),
                 _ => return Some(error(id, -32602, &format!("Unknown tool {name}"))),
             };
             match parsed {
@@ -190,6 +205,7 @@ fn acknowledgement(report: &Report) -> String {
             steps.iter().filter(|s| s.status == "completed").count(),
             steps.len()
         ),
+        Report::Suggestion { .. } => "Shown to the reviewer as a suggested comment.".into(),
     }
 }
 
@@ -217,6 +233,20 @@ fn plan_tool() -> Value {
                 }
             },
             "required": ["steps"]
+        }
+    })
+}
+
+fn suggestion_tool() -> Value {
+    json!({
+        "name": SUGGEST_TOOL_NAME,
+        "description": "Propose the comment the reviewer could post on the lines they asked you about. Call it once, after you've answered their question. Switchfold shows it as a draft the reviewer can edit; nothing is posted to GitHub.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "body": { "type": "string", "description": "The comment in Markdown, written as the reviewer would write it to the author: one to three sentences, specific and actionable." }
+            },
+            "required": ["body"]
         }
     })
 }
@@ -279,6 +309,22 @@ mod tests {
             "Plan updated: 1 of 2 steps done."
         );
         assert!(matches!(&recorded.lock().unwrap()[1], Report::Plan { steps } if steps.len() == 2));
+        let sink = recorded.clone();
+        handle(
+            &json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"suggest_comment","arguments":{"body":" Guard the nil case. "}}}),
+            move |report| {
+                sink.lock().unwrap().push(report.clone());
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(listed["result"]["tools"][2]["name"], SUGGEST_TOOL_NAME);
+        assert_eq!(
+            recorded.lock().unwrap()[2],
+            Report::Suggestion {
+                body: "Guard the nil case.".into()
+            }
+        );
         assert!(
             handle(
                 &json!({"jsonrpc":"2.0","method":"notifications/initialized"}),

@@ -4,8 +4,8 @@
 use std::time::{Duration, Instant};
 
 use acp_client::{
-    AgentEvent, Decision, PlanStatus, PromptInput, ReviewRequest, RunOutcome, SessionChoices,
-    SettingKind, ToolStatus, review_prompt,
+    AgentEvent, Decision, PlanStatus, PromptInput, QuestionInput, ReviewRequest, RunOutcome,
+    SessionChoices, SettingKind, ToolStatus, question_prompt, review_prompt,
 };
 use diff_model::{DiffLine, FileChange, FileDiff, Hunk, LineKind};
 
@@ -73,6 +73,7 @@ fn review_run_streams_tools_permission_and_findings() {
                 prompt.respond(Decision::AllowOnce);
             }
             AgentEvent::Finding(finding) => findings.push(finding),
+            AgentEvent::Suggestion(_) => panic!("a review suggests no comment"),
             AgentEvent::Message(chunk) => message.push_str(&chunk),
             AgentEvent::Thought(_) => {}
             AgentEvent::Plan(steps) => plans.push(steps),
@@ -150,5 +151,57 @@ fn a_rejected_model_fails_with_the_api_message() {
     assert_eq!(
         error,
         "The 'unsupported' model is not supported when using this mock agent with a ChatGPT account."
+    );
+}
+
+#[test]
+fn a_question_streams_the_answer_and_a_suggested_comment() {
+    let agent = env!("CARGO_BIN_EXE_acp-mock-agent");
+    let server = env!("CARGO_BIN_EXE_acp-findings-server");
+    let file = file("crates/review/src/thread.rs");
+    let prompt = question_prompt(&QuestionInput::new(
+        "flaticols/switchfold",
+        482,
+        "Render review thread",
+        &file,
+        file.hunks[0].lines.iter().collect(),
+        "Why both passes?",
+    ));
+    let request = ReviewRequest::new(format!("'{agent}'"), std::env::temp_dir(), prompt)
+        .with_findings_server(server.into());
+    let (future, events, _control) = acp_client::start_review(request);
+    std::thread::spawn(move || futures::executor::block_on(future));
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut read = Vec::new();
+    let mut answer = String::new();
+    let mut suggestion = None;
+    let outcome = loop {
+        assert!(Instant::now() < deadline, "the question timed out");
+        match events
+            .recv_blocking()
+            .expect("the run reports until it ends")
+        {
+            AgentEvent::Tool(activity) if activity.status == Some(ToolStatus::Completed) => {
+                read.extend(activity.paths)
+            }
+            AgentEvent::Message(chunk) => answer.push_str(&chunk),
+            AgentEvent::Suggestion(body) => suggestion = Some(body),
+            AgentEvent::Permission(_) => panic!("a question asks for no permission"),
+            AgentEvent::Finding(_) => panic!("a question reports no finding"),
+            AgentEvent::Finished(outcome) => break Ok(outcome),
+            AgentEvent::Failed(error) => break Err(error),
+            _ => {}
+        }
+    };
+    assert_eq!(outcome, Ok(RunOutcome::Completed));
+    assert_eq!(
+        read,
+        [std::path::PathBuf::from("crates/review/src/thread.rs")]
+    );
+    assert!(answer.starts_with("**It keeps the two orders in step.** `apply_push`"));
+    assert_eq!(
+        suggestion.as_deref(),
+        Some("Could the re-anchoring move into `apply_push` itself, so no caller can forget it?")
     );
 }

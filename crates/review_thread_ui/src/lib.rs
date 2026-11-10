@@ -3,6 +3,7 @@
 //! happened, the pending-review bar, and an inspector with reviewers, checks, agents
 //! and dependencies.
 
+mod ask;
 mod cards;
 mod commits;
 mod filters;
@@ -225,6 +226,8 @@ pub struct ReviewThreadView {
     composer: Entity<TextareaState>,
     reply_inputs: HashMap<String, Entity<TextareaState>>,
     new_thread: Option<(String, u32, Entity<TextareaState>)>,
+    /// Lines selected by their numbers, with the question being written about them.
+    line_selection: Option<ask::LineSelection>,
     editing_finding: Option<(String, Entity<TextareaState>)>,
     /// The draft the reviewer focused last, where quotes and references from the diff go.
     last_draft: Option<WeakEntity<TextareaState>>,
@@ -272,7 +275,14 @@ impl ReviewThreadView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        Self::new_pane(key, back_label.into(), PaneState::default(), true, window, cx)
+        Self::new_pane(
+            key,
+            back_label.into(),
+            PaneState::default(),
+            true,
+            window,
+            cx,
+        )
     }
 
     /// Opens one pane of the thread for `key`, showing what `state` says once the review
@@ -352,6 +362,7 @@ impl ReviewThreadView {
             composer,
             reply_inputs: HashMap::new(),
             new_thread: None,
+            line_selection: None,
             editing_finding: None,
             last_draft: None,
             list_state,
@@ -427,8 +438,7 @@ impl ReviewThreadView {
                     }
                 }
                 let head = detail.commits.last().map(|commit| commit.sha.clone());
-                if self.diffs_locally && (self.diff_source.is_none() || self.diffed_head != head)
-                {
+                if self.diffs_locally && (self.diff_source.is_none() || self.diffed_head != head) {
                     self.diffed_head = head;
                     self.diff_locally(&detail, cx);
                 }
@@ -621,11 +631,11 @@ impl ReviewThreadView {
         self.reply(thread_id, body, cx);
     }
 
-    fn viewer(&self, cx: &App) -> review_model::Actor {
+    pub(crate) fn viewer(&self, cx: &App) -> review_model::Actor {
         cx.stores().settings().read(cx).viewer_actor()
     }
 
-    fn store(&self, cx: &App) -> Entity<PullRequestStore> {
+    pub(crate) fn store(&self, cx: &App) -> Entity<PullRequestStore> {
         cx.stores().pull_requests().clone()
     }
 
@@ -652,7 +662,7 @@ impl ReviewThreadView {
         self.list_state.scroll_to_end();
     }
 
-    fn start_line_comment(
+    pub(crate) fn start_line_comment(
         &mut self,
         path: String,
         line: u32,
@@ -1058,6 +1068,10 @@ impl Render for ReviewThreadView {
                     window.focus(&this.focus_handle, cx);
                     return;
                 }
+                if this.has_line_selection() {
+                    this.clear_line_selection(cx);
+                    return;
+                }
                 cx.emit(ReviewThreadEvent::Back)
             }))
             .on_action(cx.listener(|this, _: &OpenInZed, window, cx| {
@@ -1073,9 +1087,11 @@ impl Render for ReviewThreadView {
                 this.open_agent_review(window, cx)
             }))
             .on_action(cx.listener(|this, _: &CheckOut, window, cx| this.check_out(window, cx)))
-            .on_action(cx.listener(|this, _: &app_state_ui::actions::FindInPane, window, cx| {
-                this.open_find(window, cx)
-            }))
+            .on_action(
+                cx.listener(|this, _: &app_state_ui::actions::FindInPane, window, cx| {
+                    this.open_find(window, cx)
+                }),
+            )
             .child(self.render_body(window, cx))
     }
 }

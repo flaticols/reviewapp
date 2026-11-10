@@ -1,4 +1,4 @@
-use acp_client::{Decision, PlanStatus, RunOutcome, ToolKind, ToolStatus};
+use acp_client::{PlanStatus, RunOutcome, ToolKind, ToolStatus};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _,
@@ -460,89 +460,16 @@ fn failure(run_entity: &Entity<AgentRun>, cx: &App) -> Option<AnyElement> {
     )
 }
 
-/// The agent's request to run something, with Allow once, Always allow and Deny.
+/// The agent's request to run something, answered on the run.
 fn permission(run_entity: &Entity<AgentRun>, cx: &App) -> Option<AnyElement> {
     let run = run_entity.read(cx);
     let prompt = run.permission()?;
-    let title = prompt.title().to_string();
-    let command = prompt.command().map(str::to_string);
-    let offers_always = prompt.offers(Decision::AllowAlways);
-    let agent = run.agent().login.clone();
-    let cwd = run.cwd_label().to_string();
-    let allow_once = run_entity.clone();
-    let allow_always = run_entity.clone();
-    let deny = run_entity.clone();
-    let heading = match &command {
-        Some(_) => format!("{agent} wants to run a command in {cwd}"),
-        None => format!("{agent} asks to {}", title.to_lowercase()),
-    };
-    Some(
-        v_flex()
-            .gap_2()
-            .p_3()
-            .rounded(cx.theme().radius)
-            .bg(cx.theme().warning.opacity(0.12))
-            .border_1()
-            .border_color(cx.theme().warning.opacity(0.35))
-            .child(
-                h_flex()
-                    .gap_2()
-                    .text_ui()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(
-                        Icon::new(IconName::CircleAlert)
-                            .small()
-                            .text_color(cx.theme().warning),
-                    )
-                    .child(heading),
-            )
-            .when_some(command, |this, command| {
-                this.child(
-                    div()
-                        .px_2()
-                        .py_1p5()
-                        .rounded(cx.theme().radius)
-                        .bg(cx.theme().background.opacity(0.6))
-                        .text_code(cx)
-                        .child(format!("$ {command}")),
-                )
-            })
-            .child(
-                h_flex()
-                    .gap_1()
-                    .child(
-                        Button::new("allow-once")
-                            .small()
-                            .icon(IconName::Check)
-                            .label("Allow once")
-                            .on_click(move |_, _, cx| {
-                                allow_once.update(cx, |run, cx| run.answer(Decision::AllowOnce, cx))
-                            }),
-                    )
-                    .when(offers_always, |this| {
-                        this.child(
-                            Button::new("allow-always")
-                                .ghost()
-                                .small()
-                                .label("Always allow in this repo")
-                                .on_click(move |_, _, cx| {
-                                    allow_always
-                                        .update(cx, |run, cx| run.answer(Decision::AllowAlways, cx))
-                                }),
-                        )
-                    })
-                    .child(div().flex_1())
-                    .child(
-                        Button::new("deny")
-                            .ghost()
-                            .small()
-                            .icon(IconName::X)
-                            .label("Deny")
-                            .on_click(move |_, _, cx| {
-                                deny.update(cx, |run, cx| run.answer(Decision::Deny, cx))
-                            }),
-                    ),
-            )
-            .into_any_element(),
-    )
+    let answering = run_entity.clone();
+    Some(crate::permission::prompt_card(
+        prompt,
+        &run.agent().login,
+        run.cwd_label(),
+        move |decision, cx| answering.update(cx, |run, cx| run.answer(decision, cx)),
+        cx,
+    ))
 }

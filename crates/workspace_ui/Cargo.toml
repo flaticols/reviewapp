@@ -33,6 +33,8 @@ theme_ui.workspace = true
 widgets_ui.workspace = true
 
 [dev-dependencies]
+acp_client.workspace = true
+agent_review_ui.workspace = true
 triage.workspace = true
 gpui-kit = { workspace = true, features = ["test-support"] }
 app_state_ui.workspace = true

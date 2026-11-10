@@ -198,6 +198,7 @@ dependencies = [
  "acp_client",
  "agent_registry",
  "app_state_ui",
+ "async-channel",
  "diff_model",
  "git_worktree",
  "gpui-kit",
@@ -7588,6 +7589,7 @@ dependencies = [
  "agent_review_ui",
  "anyhow",
  "app_state_ui",
+ "async-channel",
  "check_log_ui",
  "fixtures",
  "github_api",
@@ -10834,6 +10836,8 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 name = "workspace_ui"
 version = "0.1.0"
 dependencies = [
+ "acp_client",
+ "agent_review_ui",
  "app_state_ui",
  "async-channel",
  "chrome_ui",
