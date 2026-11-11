@@ -1,0 +1,44 @@
+[package]
+name = "workspace_ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+triage_ui.workspace = true
+async-channel.workspace = true
+git_diff.workspace = true
+pr_actions_ui.workspace = true
+review_model.workspace = true
+serde_json.workspace = true
+zed_bridge.workspace = true
+pr_cache.workspace = true
+command_palette_ui.workspace = true
+clone_discovery.workspace = true
+review_thread_ui.workspace = true
+settings_ui.workspace = true
+sign_in_ui.workspace = true
+gpui-kit.workspace = true
+app_state_ui.workspace = true
+diff_model.workspace = true
+futures.workspace = true
+chrome_ui.workspace = true
+fixtures.workspace = true
+github_api.workspace = true
+pr_list_ui.workspace = true
+pr_model.workspace = true
+settings_model.workspace = true
+theme_ui.workspace = true
+widgets_ui.workspace = true
+
+[dev-dependencies]
+acp_client.workspace = true
+agent_review_ui.workspace = true
+triage.workspace = true
+gpui-kit = { workspace = true, features = ["test-support"] }
+app_state_ui.workspace = true
+diff_model.workspace = true
+
+[lints]
+workspace = true

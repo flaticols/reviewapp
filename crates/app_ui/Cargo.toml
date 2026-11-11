@@ -1,0 +1,28 @@
+[package]
+name = "app_ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "switchfold"
+path = "src/main.rs"
+
+[dependencies]
+typesafe_ui.workspace = true
+async-channel.workspace = true
+zed_bridge.workspace = true
+gpui-kit.workspace = true
+acp_client.workspace = true
+app_state_ui.workspace = true
+chrome_ui.workspace = true
+pr_list_ui.workspace = true
+review_thread_ui.workspace = true
+settings_model.workspace = true
+theme_ui.workspace = true
+widgets_ui.workspace = true
+workspace_ui.workspace = true
+
+[lints]
+workspace = true

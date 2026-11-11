@@ -1,0 +1,119 @@
+[workspace]
+resolver = "3"
+# `crates/providers` only groups provider crates, so the patterns skip it and list
+# what is inside instead.
+members = ["crates/[!p]*", "crates/pr_*", "crates/providers/*"]
+
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "UNLICENSED"
+publish = false
+
+[workspace.dependencies]
+# Every grammar gpui-kit bundles except SQL, whose crate pins `cc ~1.2.1`.
+gpui-kit = { version = "0.7.1", features = [
+    "tree-sitter-astro",
+    "tree-sitter-bash",
+    "tree-sitter-c",
+    "tree-sitter-cmake",
+    "tree-sitter-cpp",
+    "tree-sitter-csharp",
+    "tree-sitter-css",
+    "tree-sitter-diff",
+    "tree-sitter-ejs",
+    "tree-sitter-elixir",
+    "tree-sitter-erb",
+    "tree-sitter-go",
+    "tree-sitter-graphql",
+    "tree-sitter-html",
+    "tree-sitter-java",
+    "tree-sitter-javascript",
+    "tree-sitter-jsdoc",
+    "tree-sitter-kotlin",
+    "tree-sitter-lua",
+    "tree-sitter-make",
+    "tree-sitter-markdown",
+    "tree-sitter-php",
+    "tree-sitter-proto",
+    "tree-sitter-python",
+    "tree-sitter-ruby",
+    "tree-sitter-rust",
+    "tree-sitter-scala",
+    "tree-sitter-svelte",
+    "tree-sitter-swift",
+    "tree-sitter-toml",
+    "tree-sitter-tsx",
+    "tree-sitter-typescript",
+    "tree-sitter-yaml",
+    "tree-sitter-zig",
+] }
+gix = { version = "0.88", default-features = false, features = ["blob-diff", "revision", "sha1"] }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+smol = "2"
+futures = "0.3"
+async-channel = "2"
+agent-client-protocol = { version = "3", features = ["process"] }
+
+pr_model = { path = "crates/pr_model" }
+pr_cache = { path = "crates/pr_cache" }
+triage = { path = "crates/triage" }
+triage_ui = { path = "crates/triage_ui" }
+settings_triage_ui = { path = "crates/settings_triage_ui" }
+typesafe = { path = "crates/providers/typesafe" }
+typesafe_ui = { path = "crates/providers/typesafe_ui" }
+markdown_ui = { path = "crates/markdown_ui" }
+zed_bridge = { path = "crates/zed_bridge" }
+diff_model = { path = "crates/diff_model" }
+review_model = { path = "crates/review_model" }
+settings_model = { path = "crates/settings_model" }
+fixtures = { path = "crates/fixtures" }
+git_diff = { path = "crates/git_diff" }
+git_worktree = { path = "crates/git_worktree" }
+clone_discovery = { path = "crates/clone_discovery" }
+tool_path = { path = "crates/tool_path" }
+github_api = { path = "crates/github_api" }
+acp_client = { path = "crates/acp_client" }
+agent_registry = { path = "crates/agent_registry" }
+editor_launch = { path = "crates/editor_launch" }
+pr_actions_ui = { path = "crates/pr_actions_ui" }
+sha2 = "0.10"
+keychain = { path = "crates/keychain" }
+theme_ui = { path = "crates/theme_ui" }
+widgets_ui = { path = "crates/widgets_ui" }
+syntax_ui = { path = "crates/syntax_ui" }
+app_state_ui = { path = "crates/app_state_ui" }
+chrome_ui = { path = "crates/chrome_ui" }
+command_palette_ui = { path = "crates/command_palette_ui" }
+pr_list_ui = { path = "crates/pr_list_ui" }
+diff_view_ui = { path = "crates/diff_view_ui" }
+review_thread_ui = { path = "crates/review_thread_ui" }
+submit_review_ui = { path = "crates/submit_review_ui" }
+agent_review_ui = { path = "crates/agent_review_ui" }
+check_log_ui = { path = "crates/check_log_ui" }
+settings_ui = { path = "crates/settings_ui" }
+settings_accounts_ui = { path = "crates/settings_accounts_ui" }
+settings_repositories_ui = { path = "crates/settings_repositories_ui" }
+settings_agents_ui = { path = "crates/settings_agents_ui" }
+settings_appearance_ui = { path = "crates/settings_appearance_ui" }
+settings_keyboard_ui = { path = "crates/settings_keyboard_ui" }
+sign_in_ui = { path = "crates/sign_in_ui" }
+github_auth_ui = { path = "crates/github_auth_ui" }
+app_ui = { path = "crates/app_ui" }
+workspace_ui = { path = "crates/workspace_ui" }
+screenshots_ui = { path = "crates/screenshots_ui" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2

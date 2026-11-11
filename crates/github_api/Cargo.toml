@@ -1,0 +1,17 @@
+[package]
+name = "github_api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+diff_model.workspace = true
+git_diff.workspace = true
+pr_model.workspace = true
+review_model.workspace = true
+serde_json.workspace = true
+tool_path.workspace = true
+
+[lints]
+workspace = true

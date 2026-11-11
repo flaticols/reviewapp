@@ -1,0 +1,27 @@
+[package]
+name = "app_state_ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+gpui-kit.workspace = true
+pr_model.workspace = true
+pr_cache.workspace = true
+diff_model.workspace = true
+review_model.workspace = true
+settings_model.workspace = true
+github_api.workspace = true
+git_diff.workspace = true
+agent_registry.workspace = true
+editor_launch.workspace = true
+keychain.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+fixtures.workspace = true
+
+[lints]
+workspace = true

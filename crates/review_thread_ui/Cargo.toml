@@ -1,0 +1,35 @@
+[package]
+name = "review_thread_ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+github_api.workspace = true
+triage.workspace = true
+triage_ui.workspace = true
+markdown_ui.workspace = true
+pr_actions_ui.workspace = true
+gpui-kit.workspace = true
+agent_review_ui.workspace = true
+app_state_ui.workspace = true
+check_log_ui.workspace = true
+diff_model.workspace = true
+diff_view_ui.workspace = true
+git_worktree.workspace = true
+git_diff.workspace = true
+pr_model.workspace = true
+review_model.workspace = true
+submit_review_ui.workspace = true
+syntax_ui.workspace = true
+theme_ui.workspace = true
+widgets_ui.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+fixtures.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
