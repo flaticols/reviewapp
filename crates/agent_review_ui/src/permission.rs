@@ -12,9 +12,9 @@ use gpui_kit::{
 };
 use theme_ui::TypographyExt as _;
 
-/// Answers `prompt` without asking when the reviewer turned asking off or always
-/// allows its command in `repository`. Returns the prompt when the reviewer must
-/// decide.
+/// Answers `prompt` without asking when the reviewer turned asking off, always allows
+/// its command in `repository`, or lets agents run commands that only read and this one
+/// does. Returns the prompt when the reviewer must decide.
 pub(crate) fn screen(
     prompt: PermissionPrompt,
     repository: &str,
@@ -24,7 +24,9 @@ pub(crate) fn screen(
     let remembered = prompt
         .command()
         .is_some_and(|command| preferences.is_command_allowed(repository, command));
-    if !preferences.ask_before_commands || remembered {
+    let reads = preferences.allow_read_only_commands
+        && prompt.command().is_some_and(crate::read_only::is_read_only);
+    if !preferences.ask_before_commands || remembered || reads {
         prompt.respond(if remembered {
             Decision::AllowAlways
         } else {

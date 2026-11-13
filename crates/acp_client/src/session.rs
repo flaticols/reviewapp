@@ -92,7 +92,36 @@ pub struct PermissionPrompt {
     responder: oneshot::Sender<Option<String>>,
 }
 
+impl PermissionChoice {
+    /// The option `id`, shown as `label`, that answers with `decision`.
+    pub fn new(id: impl Into<String>, label: impl Into<String>, decision: Decision) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            decision,
+        }
+    }
+}
+
 impl PermissionPrompt {
+    /// A prompt for a session that isn't a live agent, such as a scripted one in tests.
+    /// The id of the option it is answered with, or `None` when it is cancelled, arrives
+    /// on the returned receiver.
+    pub fn scripted(
+        title: impl Into<String>,
+        command: Option<String>,
+        choices: Vec<PermissionChoice>,
+    ) -> (Self, oneshot::Receiver<Option<String>>) {
+        let (responder, answer) = oneshot::channel();
+        let prompt = Self {
+            title: title.into(),
+            command,
+            choices,
+            responder,
+        };
+        (prompt, answer)
+    }
+
     /// The tool call's title, such as `Run cargo test`.
     pub fn title(&self) -> &str {
         &self.title

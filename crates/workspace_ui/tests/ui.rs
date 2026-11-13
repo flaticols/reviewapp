@@ -1704,3 +1704,110 @@ fn merging_from_the_title_bar_uses_the_chosen_method(cx: &mut TestAppContext) {
         "merging with the repository's default, squash, marks it merged"
     );
 }
+
+#[gpui_kit::test]
+fn agents_run_read_only_commands_unasked_once_the_setting_allows_it(cx: &mut TestAppContext) {
+    use acp_client::{AgentEvent, Decision, PermissionChoice, PermissionPrompt};
+    use app_state_ui::StoresExt as _;
+    type Answer = futures::channel::oneshot::Receiver<Option<String>>;
+    let answers: std::rc::Rc<std::cell::RefCell<Vec<Answer>>> = Default::default();
+    let kept = answers.clone();
+    script_agent(
+        move || {
+            let prompt = |command: &str| {
+                let (prompt, answer) = PermissionPrompt::scripted(
+                    format!("Run {command}"),
+                    Some(command.to_string()),
+                    vec![
+                        PermissionChoice::new("allow", "Allow", Decision::AllowOnce),
+                        PermissionChoice::new("deny", "Deny", Decision::Deny),
+                    ],
+                );
+                kept.borrow_mut().push(answer);
+                AgentEvent::Permission(prompt)
+            };
+            vec![
+                AgentEvent::Connected {
+                    name: None,
+                    version: None,
+                },
+                prompt("sed -n 120,160p crates/review/src/thread.rs | grep -n blocks"),
+                AgentEvent::Message("Read the loop.".into()),
+                prompt("rm crates/review/src/thread.rs"),
+            ]
+        },
+        cx,
+    );
+    let (window, _) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.press("cmd-,", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        // Settings navigation rows are section-group-row; Agents & editor is the third.
+        window.click("0-0-2", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("allow-read-only-commands").checked(),
+            Some(false),
+            "agents ask before every command by default"
+        );
+        window.click("allow-read-only-commands", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("allow-read-only-commands").checked(),
+            Some(true),
+            "the switch turns on"
+        );
+        window.click("back-to-pull-requests", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let allowed = cx.update(|cx| {
+        cx.stores()
+            .settings()
+            .read(cx)
+            .preferences()
+            .allow_read_only_commands
+    });
+    assert!(allowed, "the setting is saved");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("flaticols/switchfold#482", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+
+    ask_about_two_lines(window, "Why both?", cx);
+    let mut answers = answers.borrow_mut();
+    assert_eq!(answers.len(), 2);
+    assert_eq!(
+        answers[0].try_recv(),
+        Ok(Some(Some("allow".to_string()))),
+        "a command that only reads runs without asking"
+    );
+    assert_eq!(
+        answers[1].try_recv(),
+        Ok(None),
+        "rm still waits for the reviewer"
+    );
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            on_screen(window, "allow-once"),
+            "rm still asks in the question card"
+        );
+    })
+    .unwrap();
+}
