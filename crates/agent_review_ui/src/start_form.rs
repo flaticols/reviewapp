@@ -154,6 +154,11 @@ impl StartReviewForm {
             self.show_settings(state, window, cx);
             return;
         }
+        // A scripted launcher stands in for the agent, so there is no process to ask.
+        if cx.has_global::<crate::AgentLauncher>() {
+            self.show_settings(SettingsState::Ready(Default::default()), window, cx);
+            return;
+        }
         self.settings = SettingsState::Loading;
         let command_line = launch_command(&agent);
         let env = vec![("PATH".to_string(), tool_path::path_env())];

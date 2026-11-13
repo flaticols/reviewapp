@@ -1944,3 +1944,119 @@ fn the_reviewer_replies_to_an_agent_in_the_same_session(cx: &mut TestAppContext)
     })
     .unwrap();
 }
+
+/// Runs git in `dir`, panicking with its message on failure.
+fn git(dir: &std::path::Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("git runs");
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+/// A clone named `switchfold` under a fresh `dir`, whose origin has the featured pull
+/// request's head branch.
+fn clone_with_featured_branch(dir: &std::path::Path) -> std::path::PathBuf {
+    std::fs::remove_dir_all(dir).ok();
+    let origin = dir.join("origin");
+    std::fs::create_dir_all(&origin).unwrap();
+    git(&origin, &["init", "--quiet", "-b", "main"]);
+    git(&origin, &["config", "user.email", "t@example.com"]);
+    git(&origin, &["config", "user.name", "t"]);
+    std::fs::write(origin.join("a.txt"), "base\n").unwrap();
+    git(&origin, &["add", "."]);
+    git(&origin, &["commit", "--quiet", "-m", "base"]);
+    git(&origin, &["checkout", "--quiet", "-b", "feat/thread-view"]);
+    std::fs::write(origin.join("a.txt"), "thread view\n").unwrap();
+    git(&origin, &["commit", "--quiet", "-am", "thread view"]);
+    git(&origin, &["checkout", "--quiet", "main"]);
+    let clone = dir.join("switchfold");
+    git(
+        dir,
+        &["clone", "--quiet", &origin.to_string_lossy(), "switchfold"],
+    );
+    clone
+}
+
+#[gpui_kit::test]
+fn the_row_menu_checks_a_pull_request_out_in_a_new_worktree(cx: &mut TestAppContext) {
+    use app_state_ui::StoresExt as _;
+    use gpui_kit::component::WindowExt as _;
+    let dir = std::env::temp_dir().join(format!("switchfold-ui-worktree-{}", std::process::id()));
+    let clone = clone_with_featured_branch(&dir);
+    let (window, _) = open(cx);
+    cx.update(|cx| {
+        let settings = cx.stores().settings().clone();
+        settings.update(cx, |settings, cx| {
+            settings.set_repository_path("flaticols/switchfold", clone.clone(), cx)
+        });
+    });
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.right_click("flaticols/switchfold#482", cx);
+    })
+    .unwrap();
+    // Open on GitHub, Open in Zed, Diff in Zed, Check out, Check out in new worktree.
+    pick_menu_item(window, 4, cx);
+    settle(window, "new-worktree-create", cx);
+    let default = dir.join("switchfold.feat-thread-view");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("new-worktree-branch").label(),
+            Some("Branch feat/thread-view")
+        );
+        assert_eq!(
+            window.find("new-worktree-destination").label(),
+            Some(format!("Creates {}", default.display()).as_str()),
+            "the folder defaults to <clone>.<branch> beside the clone"
+        );
+    })
+    .unwrap();
+
+    let chosen = dir.join("review-482");
+    cx.update_window(window, |_, window, cx| {
+        assert!(window.has_focused_input(cx), "the folder field takes focus");
+        window.press("cmd-a", cx);
+        window.input(&chosen.to_string_lossy(), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("new-worktree-destination").label(),
+            Some(format!("Creates {}", chosen.display()).as_str()),
+            "the typed folder replaces the default"
+        );
+        window.click("new-worktree-create", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            !on_screen(window, "new-worktree-create"),
+            "creating closes the dialog"
+        );
+    })
+    .unwrap();
+    assert_eq!(
+        git(&chosen, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "feat/thread-view"
+    );
+    assert_eq!(
+        std::fs::read_to_string(chosen.join("a.txt")).unwrap(),
+        "thread view\n"
+    );
+    assert!(!default.exists());
+    assert_eq!(git(&clone, &["rev-parse", "--abbrev-ref", "HEAD"]), "main");
+    std::fs::remove_dir_all(&dir).ok();
+}

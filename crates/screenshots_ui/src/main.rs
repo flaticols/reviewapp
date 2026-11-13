@@ -39,6 +39,7 @@ enum Scene {
     OneCommit,
     /// The Request review dialog.
     RequestReview,
+    NewWorktree,
     /// The pull request popover from the title bar.
     TitlePopover,
     /// The thread with a picked code font and size.
@@ -85,7 +86,7 @@ enum Scene {
 }
 
 impl Scene {
-    const ALL: [Scene; 37] = [
+    const ALL: [Scene; 38] = [
         Self::List,
         Self::OneCommit,
         Self::RowMenu,
@@ -93,6 +94,7 @@ impl Scene {
         Self::RepoMenu,
         Self::FileMenu,
         Self::RequestReview,
+        Self::NewWorktree,
         Self::Thread,
         Self::ApprovePopover,
         Self::MergePopover,
@@ -137,6 +139,7 @@ impl Scene {
             Self::FileMenu => "02h-file-menu",
             Self::OneCommit => "02i-one-commit",
             Self::RequestReview => "03c-request-review",
+            Self::NewWorktree => "03f-new-worktree",
             Self::TitlePopover => "02e-title-popover",
             Self::ThreadCodeFont => "02c-thread-code-font",
             Self::ThreadEspresso => "02g-thread-palettes",
@@ -338,6 +341,7 @@ fn render(
                 | Scene::FileMenu
                 | Scene::OneCommit
                 | Scene::RequestReview
+                | Scene::NewWorktree
                 | Scene::TitlePopover
                 | Scene::ThreadCodeFont
                 | Scene::ThreadEspresso
@@ -477,6 +481,24 @@ fn render(
         }
         Scene::RequestReview => {
             pr_actions_ui::open_request_review(target.clone(), window, cx);
+        }
+        Scene::NewWorktree => {
+            use app_state_ui::StoresExt as _;
+            let head_ref = cx
+                .stores()
+                .pull_requests()
+                .read(cx)
+                .pull_request(&target)
+                .map(|pr| pr.head_ref.clone())
+                .unwrap_or_default();
+            let clone = cx
+                .stores()
+                .settings()
+                .read(cx)
+                .clone_path(target.repo())
+                .map(|path| path.to_path_buf())
+                .unwrap_or_else(|| home.join("Developer").join(target.repo().name()));
+            pr_actions_ui::open_new_worktree(target.clone(), head_ref, clone, window, cx);
         }
         Scene::ApprovePopover | Scene::TitlePopover | Scene::MergePopover => {
             use gpui_kit::test::TestWindowExt as _;
