@@ -67,6 +67,8 @@ pub fn pull_request_menu(
     let zed_key = target.key.clone();
     let checkout_key = target.key.clone();
     let diff_key = target.key.clone();
+    let worktree_key = target.key.clone();
+    let worktree_ref = target.head_ref.clone();
     let head_ref = target.head_ref.clone();
     let approve_target = target.clone();
     let request_key = target.key.clone();
@@ -100,6 +102,13 @@ pub fn pull_request_menu(
                 .icon(Icon::new(IconName::GitBranch))
                 .on_click(move |_, window, cx| {
                     crate::check_out(&checkout_key, &head_ref, window, cx)
+                }),
+        )
+        .item(
+            PopupMenuItem::new("Check out in new worktree…")
+                .icon(Icon::new(IconName::FolderPlus))
+                .on_click(move |_, window, cx| {
+                    crate::check_out_in_new_worktree(&worktree_key, &worktree_ref, window, cx)
                 }),
         );
     let menu = match review_with_agent {

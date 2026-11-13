@@ -31,6 +31,7 @@ gpui_kit::assets::icon_assets!(
         FileDiff,
         Folder,
         FolderGit2,
+        FolderPlus,
         GitBranch,
         GitCommitHorizontal,
         GitCompare,
@@ -104,5 +105,22 @@ impl AssetSource for AppAssets {
         paths.sort();
         paths.dedup();
         Ok(paths)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui_kit::assets::IconName;
+
+    #[test]
+    fn menu_icons_are_bundled() {
+        for icon in [IconName::FolderPlus, IconName::GitBranch] {
+            let path = icon.path();
+            assert!(
+                matches!(AppAssets.load(&path), Ok(Some(_))),
+                "{path} isn't bundled, so it paints blank"
+            );
+        }
     }
 }

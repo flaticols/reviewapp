@@ -233,6 +233,119 @@ pub fn check_out(checkout: &Checkout) -> Result<PathBuf, CheckoutError> {
     Ok(destination)
 }
 
+/// A new worktree on a pull request's head branch, in a folder the user picks. The local
+/// branch is named after the head branch, so pushing from the worktree updates the pull
+/// request.
+#[derive(Clone, Debug)]
+pub struct NewWorktree {
+    clone: PathBuf,
+    head_ref: String,
+    number: u64,
+    path: PathBuf,
+}
+
+impl NewWorktree {
+    /// A worktree of the clone at `clone` on `head_ref` of pull request `number`, at
+    /// [`default_path`](Self::default_path) until [`at`](Self::at) picks another.
+    pub fn new(clone: PathBuf, head_ref: impl Into<String>, number: u64) -> Self {
+        let head_ref = head_ref.into();
+        let path = Self::default_path(&clone, &head_ref);
+        Self {
+            clone,
+            head_ref,
+            number,
+            path,
+        }
+    }
+
+    /// Puts the worktree at `path` instead.
+    pub fn at(mut self, path: PathBuf) -> Self {
+        self.path = path;
+        self
+    }
+
+    /// `<clone parent>/<clone name>.<branch>`, beside the clone, with each `/` of the
+    /// branch turned into `-` so the folder doesn't nest.
+    pub fn default_path(clone: &Path, head_ref: &str) -> PathBuf {
+        let name = clone
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "repo".into());
+        let branch = head_ref.replace(['/', '\\'], "-");
+        clone
+            .parent()
+            .unwrap_or(clone)
+            .join(format!("{name}.{branch}"))
+    }
+
+    /// The folder the worktree goes in.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// The branch the worktree checks out.
+    pub fn branch(&self) -> &str {
+        &self.head_ref
+    }
+
+    /// Fetches the pull request head and adds the worktree, returning its folder.
+    ///
+    /// Refuses a path that already exists. A local branch of the same name is moved up to
+    /// the pull request when it is behind, kept when it is ahead, and refused when the two
+    /// have diverged: nothing local is overwritten.
+    pub fn create(&self) -> Result<PathBuf, CheckoutError> {
+        if !self.path.is_absolute() {
+            return Err(CheckoutError("Choose an absolute folder path.".into()));
+        }
+        if self.path.exists() {
+            return Err(CheckoutError(format!(
+                "{} already exists. Choose another folder.",
+                self.path.display()
+            )));
+        }
+        let pull = format!("pull/{}/head", self.number);
+        if git(&self.clone, &["fetch", "--quiet", "origin", &pull]).is_err() {
+            git(&self.clone, &["fetch", "--quiet", "origin", &self.head_ref])?;
+        }
+        let tip = git(&self.clone, &["rev-parse", "FETCH_HEAD^{commit}"])?;
+        let branch = &self.head_ref;
+        let local = format!("refs/heads/{branch}");
+        let path_text = self.path.to_string_lossy().into_owned();
+        git(&self.clone, &["worktree", "prune"]).ok();
+        if git(&self.clone, &["rev-parse", "--verify", "--quiet", &local]).is_ok() {
+            let behind = git(&self.clone, &["merge-base", "--is-ancestor", &local, &tip]).is_ok();
+            let ahead = git(&self.clone, &["merge-base", "--is-ancestor", &tip, &local]).is_ok();
+            if !ahead && !behind {
+                return Err(CheckoutError(format!(
+                    "Your local {branch} has diverged from the pull request. Reconcile it first."
+                )));
+            }
+            git(&self.clone, &["worktree", "add", &path_text, branch])?;
+            if behind && !ahead {
+                git(&self.path, &["merge", "--quiet", "--ff-only", &tip])?;
+            }
+        } else {
+            git(
+                &self.clone,
+                &["worktree", "add", "-b", branch, &path_text, &tip],
+            )?;
+            // Only a branch in the same repository has an upstream to track; a fork's
+            // doesn't, and the worktree is still useful without one.
+            git(
+                &self.clone,
+                &[
+                    "branch",
+                    "--quiet",
+                    &format!("--set-upstream-to=origin/{branch}"),
+                    branch,
+                ],
+            )
+            .ok();
+        }
+        Ok(self.path.clone())
+    }
+}
+
 /// Paths in a pull request that agents load as their own configuration: hook commands,
 /// permission rules that let commands run unasked, and MCP servers they start. A pull
 /// request is untrusted input, so review trees drop them before an agent starts there.
@@ -478,6 +591,82 @@ mod tests {
         // The branch moved on: a squash from the old head is refused, not forced.
         let stale = Squash::new(clone.clone(), 7, head, "feature", "main", "Again");
         assert!(stale.run().is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn new_worktrees_default_beside_the_clone() {
+        assert_eq!(
+            NewWorktree::default_path(Path::new("/src/switchfold"), "feat/thread-view"),
+            PathBuf::from("/src/switchfold.feat-thread-view")
+        );
+        let worktree = NewWorktree::new("/src/switchfold".into(), "main", 1);
+        assert_eq!(worktree.path(), Path::new("/src/switchfold.main"));
+        let moved = worktree.at("/elsewhere/tree".into());
+        assert_eq!(moved.path(), Path::new("/elsewhere/tree"));
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("switchfold-{name}-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn new_worktrees_check_out_the_head_branch() {
+        let dir = scratch("new-worktree");
+        let (clone, head) = repositories(&dir);
+        let worktree = NewWorktree::new(clone.clone(), "feature", 7);
+        let path = worktree.create().expect("the worktree is created");
+        assert_eq!(path, dir.join("clone.feature"));
+        assert_eq!(git(&path, &["rev-parse", "HEAD"]).unwrap(), head);
+        assert_eq!(
+            git(&path, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+            "feature"
+        );
+        assert_eq!(
+            git(&path, &["rev-parse", "--abbrev-ref", "feature@{upstream}"]).unwrap(),
+            "origin/feature"
+        );
+        assert_eq!(
+            git(&clone, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+            "main",
+            "the clone stays on its branch"
+        );
+        let again = worktree.create().unwrap_err();
+        assert!(again.to_string().contains("already exists"), "{again}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn new_worktrees_move_a_stale_branch_up_but_never_a_diverged_one() {
+        let dir = scratch("new-worktree-branch");
+        let (clone, head) = repositories(&dir);
+        let run = |dir: &Path, args: &[&str]| git(dir, args).unwrap();
+        run(&clone, &["branch", "feature", "main"]);
+        let path = NewWorktree::new(clone.clone(), "feature", 7)
+            .at(dir.join("behind"))
+            .create()
+            .expect("a branch behind the pull request is fast-forwarded");
+        assert_eq!(git(&path, &["rev-parse", "HEAD"]).unwrap(), head);
+        run(&clone, &["worktree", "remove", &path.to_string_lossy()]);
+
+        run(&clone, &["config", "user.email", "t@example.com"]);
+        run(&clone, &["config", "user.name", "t"]);
+        run(&clone, &["checkout", "--quiet", "-B", "feature", "main"]);
+        std::fs::write(clone.join("local.txt"), "mine\n").unwrap();
+        run(&clone, &["add", "."]);
+        run(&clone, &["commit", "--quiet", "-m", "local"]);
+        let local = run(&clone, &["rev-parse", "HEAD"]);
+        run(&clone, &["checkout", "--quiet", "main"]);
+        let error = NewWorktree::new(clone.clone(), "feature", 7)
+            .at(dir.join("diverged"))
+            .create()
+            .unwrap_err();
+        assert!(error.to_string().contains("diverged"), "{error}");
+        assert_eq!(run(&clone, &["rev-parse", "feature"]), local);
+        assert!(!dir.join("diverged").exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 
