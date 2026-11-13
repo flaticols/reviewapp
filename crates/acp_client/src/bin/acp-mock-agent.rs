@@ -4,7 +4,8 @@
 //! the first MCP server it was given, and ends the turn. Its sessions offer a mode, a
 //! model, and an effort that only the `deep` model has, as Codex's do. The `unsupported`
 //! model fails the prompt with a nested API error, as Codex does for models an account
-//! can't use.
+//! can't use. Every prompt after the first in a process is a follow-up: it answers
+//! `Turn <n> in <session>: <prompt>` and ends the turn.
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio as ProcessStdio};
@@ -23,6 +24,9 @@ use agent_client_protocol::{Agent, Stdio};
 use serde_json::{Value, json};
 
 const STEP: Duration = Duration::from_millis(150);
+
+/// Prompts received so far, so a follow-up can say which turn it is.
+static TURNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// MCP servers from the latest `session/new`, used when the prompt arrives.
 static SERVERS: std::sync::Mutex<Vec<McpServer>> = std::sync::Mutex::new(Vec::new());
@@ -246,6 +250,18 @@ fn main() {
                         let prompt = prompt_text(&request);
                         let servers: Vec<McpServer> =
                             SERVERS.lock().map(|servers| servers.clone()).unwrap_or_default();
+                        let turn = TURNS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                        if turn > 1 {
+                            connection.send_notification(SessionNotification::new(
+                                session.clone(),
+                                SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                                    ContentBlock::Text(TextContent::new(format!(
+                                        "Turn {turn} in {session}: {prompt}"
+                                    ))),
+                                )),
+                            ))?;
+                            return responder.respond(PromptResponse::new(StopReason::EndTurn));
+                        }
                         if let Some(path) = question_file(&prompt) {
                             let read = |status| {
                                 SessionNotification::new(

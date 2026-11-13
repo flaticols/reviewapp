@@ -92,7 +92,36 @@ pub struct PermissionPrompt {
     responder: oneshot::Sender<Option<String>>,
 }
 
+impl PermissionChoice {
+    /// The option `id`, shown as `label`, that answers with `decision`.
+    pub fn new(id: impl Into<String>, label: impl Into<String>, decision: Decision) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            decision,
+        }
+    }
+}
+
 impl PermissionPrompt {
+    /// A prompt for a session that isn't a live agent, such as a scripted one in tests.
+    /// The id of the option it is answered with, or `None` when it is cancelled, arrives
+    /// on the returned receiver.
+    pub fn scripted(
+        title: impl Into<String>,
+        command: Option<String>,
+        choices: Vec<PermissionChoice>,
+    ) -> (Self, oneshot::Receiver<Option<String>>) {
+        let (responder, answer) = oneshot::channel();
+        let prompt = Self {
+            title: title.into(),
+            command,
+            choices,
+            responder,
+        };
+        (prompt, answer)
+    }
+
     /// The tool call's title, such as `Run cargo test`.
     pub fn title(&self) -> &str {
         &self.title
@@ -165,6 +194,10 @@ pub enum AgentEvent {
     Finding(ReportedFinding),
     /// The comment the agent proposes for the lines it was asked about.
     Suggestion(String),
+    /// A turn ended and the session waits for a follow-up through
+    /// [`RunControl::follow_up`]. Only sessions started [`with_follow_ups`](ReviewRequest::with_follow_ups)
+    /// send it; [`Finished`](Self::Finished) still ends the session.
+    TurnEnded(RunOutcome),
     /// The run ended.
     Finished(RunOutcome),
     /// The run failed; the message explains why.
@@ -186,6 +219,8 @@ pub struct ReviewRequest {
     pub findings_server: Option<PathBuf>,
     /// The model, effort and mode to switch the session to before prompting.
     pub choices: SessionChoices,
+    /// Keeps the session open after a completed turn for follow-up prompts.
+    pub follow_ups: bool,
 }
 
 impl ReviewRequest {
@@ -198,7 +233,16 @@ impl ReviewRequest {
             prompt: prompt.into(),
             findings_server: None,
             choices: SessionChoices::default(),
+            follow_ups: false,
         }
+    }
+
+    /// Keeps the session open after each completed turn: the run sends
+    /// [`AgentEvent::TurnEnded`] and waits for [`RunControl::follow_up`] until it is
+    /// cancelled or its control is dropped.
+    pub fn with_follow_ups(mut self) -> Self {
+        self.follow_ups = true;
+        self
     }
 
     /// Switches the session's model, effort and mode before prompting.
@@ -220,18 +264,40 @@ impl ReviewRequest {
     }
 }
 
-/// Stops a run: the agent is asked to cancel, then its process group is killed.
+/// Stops a run, and sends follow-ups to a session that takes them. Stopping, or dropping
+/// the control, asks the agent to cancel and then kills its process group.
 #[derive(Debug)]
 pub struct RunControl {
     cancel: Option<oneshot::Sender<()>>,
+    follow_ups: async_channel::Sender<String>,
 }
 
 impl RunControl {
+    /// A control for a session that isn't a live agent, such as a scripted one in tests:
+    /// follow-ups arrive on the returned receiver, which closes once the control is
+    /// cancelled or dropped.
+    pub fn scripted() -> (Self, async_channel::Receiver<String>) {
+        let (cancel, _) = oneshot::channel();
+        let (follow_ups, texts) = async_channel::unbounded();
+        let control = Self {
+            cancel: Some(cancel),
+            follow_ups,
+        };
+        (control, texts)
+    }
+
+    /// Sends `text` as the next prompt of a session waiting after
+    /// [`AgentEvent::TurnEnded`]. Returns false when the session has ended.
+    pub fn follow_up(&self, text: impl Into<String>) -> bool {
+        self.cancel.is_some() && self.follow_ups.try_send(text.into()).is_ok()
+    }
+
     /// Asks the agent to stop. A second call does nothing.
     pub fn cancel(&mut self) {
         if let Some(cancel) = self.cancel.take() {
             cancel.send(()).ok();
         }
+        self.follow_ups.close();
     }
 }
 
@@ -246,8 +312,9 @@ pub fn start_review(
 ) {
     let (events, receiver) = async_channel::unbounded();
     let (cancel, cancelled) = oneshot::channel();
+    let (follow_ups, follow_up_texts) = async_channel::unbounded();
     let future = async move {
-        let result = run(request, events.clone(), cancelled).await;
+        let result = run(request, events.clone(), cancelled, follow_up_texts).await;
         let event = match result {
             Ok(outcome) => AgentEvent::Finished(outcome),
             Err(message) => AgentEvent::Failed(message),
@@ -259,6 +326,7 @@ pub fn start_review(
         receiver,
         RunControl {
             cancel: Some(cancel),
+            follow_ups,
         },
     )
 }
@@ -316,6 +384,7 @@ async fn run(
     request: ReviewRequest,
     events: async_channel::Sender<AgentEvent>,
     cancelled: oneshot::Receiver<()>,
+    follow_up_texts: async_channel::Receiver<String>,
 ) -> Result<RunOutcome, String> {
     let agent = agent_for(&request.command_line, &request.env)?;
 
@@ -369,6 +438,8 @@ async fn run(
     let prompt = request.prompt.clone();
     let connected_events = events.clone();
     let choices = request.choices.clone();
+    let follow_ups = request.follow_ups;
+    let turn_events = events.clone();
 
     agent_client_protocol::Client
         .builder()
@@ -543,25 +614,46 @@ async fn run(
                     session.config_options.unwrap_or_default(),
                 )
                 .await?;
-            let prompt_request = connection.send_request(PromptRequest::new(
-                session_id.clone(),
-                vec![ContentBlock::Text(TextContent::new(prompt))],
-            ));
-            let mut response = Box::pin(prompt_request.block_task().fuse());
             let mut cancelled = cancelled.fuse();
-            let stop = futures::select! {
-                response = response => response?.stop_reason,
-                _ = cancelled => {
-                    connection.send_notification(CancelNotification::new(session_id))?;
-                    response.await?.stop_reason
+            let mut text = prompt;
+            loop {
+                let prompt_request = connection.send_request(PromptRequest::new(
+                    session_id.clone(),
+                    vec![ContentBlock::Text(TextContent::new(text))],
+                ));
+                let mut response = Box::pin(prompt_request.block_task().fuse());
+                let mut stopped = false;
+                let stop = futures::select! {
+                    response = response => response?.stop_reason,
+                    _ = cancelled => {
+                        stopped = true;
+                        connection.send_notification(CancelNotification::new(session_id.clone()))?;
+                        response.await?.stop_reason
+                    }
+                };
+                let outcome = match stop {
+                    StopReason::EndTurn => RunOutcome::Completed,
+                    StopReason::Cancelled => RunOutcome::Cancelled,
+                    StopReason::Refusal => RunOutcome::Refused,
+                    _ => RunOutcome::Truncated,
+                };
+                let open = matches!(outcome, RunOutcome::Completed | RunOutcome::Truncated);
+                if !follow_ups || stopped || !open {
+                    return Ok(outcome);
                 }
-            };
-            Ok(match stop {
-                StopReason::EndTurn => RunOutcome::Completed,
-                StopReason::Cancelled => RunOutcome::Cancelled,
-                StopReason::Refusal => RunOutcome::Refused,
-                _ => RunOutcome::Truncated,
-            })
+                turn_events
+                    .send(AgentEvent::TurnEnded(outcome.clone()))
+                    .await
+                    .ok();
+                let next = futures::select! {
+                    text = follow_up_texts.recv().fuse() => text.ok(),
+                    _ = cancelled => None,
+                };
+                match next {
+                    Some(next) => text = next,
+                    None => return Ok(outcome),
+                }
+            }
         })
         .await
         .map_err(|error| readable_error(&error.to_string()))

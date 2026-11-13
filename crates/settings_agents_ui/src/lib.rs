@@ -412,6 +412,13 @@ impl Render for AgentsPage {
                     |p, v| p.ask_before_commands = v,
                 ))
                 .row(preference_row(
+                    "allow-read-only-commands",
+                    "Let agents run commands that only read",
+                    "Runs sed -n, grep, cat, git diff and similar without asking. Commands that write, build or reach the network still ask.",
+                    preferences.allow_read_only_commands,
+                    |p, v| p.allow_read_only_commands = v,
+                ))
+                .row(preference_row(
                     "agents-post-directly",
                     "Add agent findings to your review automatically",
                     "When off, findings stay drafts until you add them to a review.",

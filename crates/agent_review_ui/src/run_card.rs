@@ -4,6 +4,7 @@ use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
+    input::Textarea,
     progress::Progress,
     spinner::Spinner,
     v_flex,
@@ -14,7 +15,7 @@ use gpui_kit::{
 };
 use pr_model::format_duration;
 use theme_ui::{ActiveAppTheme as _, TypographyExt as _};
-use widgets_ui::{AvatarSize, InitialsAvatar};
+use widgets_ui::{AvatarSize, EditMenu, InitialsAvatar};
 
 use crate::{Activity, AgentRun, RunState};
 
@@ -37,7 +38,8 @@ impl AgentRunCard {
 }
 
 impl RenderOnce for AgentRunCard {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let reply = reply(&self.run, window, cx);
         let run = self.run.read(cx);
         let now = current_step(run);
         card(cx)
@@ -56,6 +58,7 @@ impl RenderOnce for AgentRunCard {
             })
             .children(permission(&self.run, cx))
             .children(failure(&self.run, cx))
+            .children(reply)
     }
 }
 
@@ -74,7 +77,8 @@ impl AgentRunDetails {
 }
 
 impl RenderOnce for AgentRunDetails {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let reply = reply(&self.run, window, cx);
         let run = self.run.read(cx);
         let id = self.run.entity_id().as_u64();
         let (seen, total) = run.progress();
@@ -175,6 +179,7 @@ impl RenderOnce for AgentRunDetails {
             })
             .children(permission(&self.run, cx))
             .children(failure(&self.run, cx))
+            .children(reply)
             .children(transcript(&self.run, cx))
     }
 }
@@ -455,6 +460,38 @@ fn failure(run_entity: &Entity<AgentRun>, cx: &App) -> Option<AnyElement> {
                 .on_click(|_, window, cx| {
                     window.dispatch_action(Box::new(app_state_ui::actions::ReviewWithAgent), cx)
                 }),
+            )
+            .into_any_element(),
+    )
+}
+
+/// Where the reviewer answers the agent once its turn ended, in the same session.
+fn reply(run_entity: &Entity<AgentRun>, window: &mut Window, cx: &mut App) -> Option<AnyElement> {
+    if !run_entity.read(cx).can_reply() {
+        return None;
+    }
+    let id = run_entity.entity_id().as_u64();
+    let input = run_entity.update(cx, |run, cx| run.reply_input(window, cx));
+    let sending = run_entity.clone();
+    Some(
+        v_flex()
+            .gap_2()
+            .pl_8()
+            .child(EditMenu::new(
+                SharedString::from(format!("agent-reply-input-{id}")),
+                &input,
+                Textarea::new(&input),
+            ))
+            .child(
+                h_flex().justify_end().child(
+                    Button::new(SharedString::from(format!("send-agent-reply-{id}")))
+                        .small()
+                        .primary()
+                        .label("Reply")
+                        .on_click(move |_, window, cx| {
+                            sending.update(cx, |run, cx| run.send_reply(window, cx))
+                        }),
+                ),
             )
             .into_any_element(),
     )

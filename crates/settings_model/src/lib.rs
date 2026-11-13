@@ -397,6 +397,8 @@ pub struct Preferences {
     pub worktree_per_pull_request: bool,
     pub remove_worktree_after_merge: bool,
     pub ask_before_commands: bool,
+    /// Lets agents run shell commands that only read without asking.
+    pub allow_read_only_commands: bool,
     pub agents_post_directly: bool,
     pub share_discussion_with_agents: bool,
     pub zed_command: String,
@@ -561,6 +563,7 @@ impl Default for Preferences {
             worktree_per_pull_request: true,
             remove_worktree_after_merge: false,
             ask_before_commands: true,
+            allow_read_only_commands: false,
             agents_post_directly: false,
             share_discussion_with_agents: true,
             zed_command: "/usr/local/bin/zed".into(),

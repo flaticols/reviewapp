@@ -6,7 +6,8 @@ use acp_client::{
     RunOutcome, ToolActivity, ToolKind, ToolStatus,
 };
 use app_state_ui::StoresExt as _;
-use gpui_kit::{App, AppContext as _, Context, Task};
+use gpui_kit::component::input::{InputEvent, TextareaState};
+use gpui_kit::{App, AppContext as _, Context, Entity, Task, Window};
 use pr_model::{PullRequestKey, Timestamp};
 use review_model::{Actor, AgentFinding, AgentReviewSummary};
 
@@ -78,6 +79,12 @@ pub struct AgentRun {
     auto_add: bool,
     started: Instant,
     control: Option<RunControl>,
+    /// The turn ended and the agent's session waits for the reviewer's reply.
+    awaiting_reply: bool,
+    /// Where the reviewer writes that reply, made the first time it shows.
+    reply_input: Option<Entity<TextareaState>>,
+    /// The first completed turn put the review on the timeline; later turns don't again.
+    summary_recorded: bool,
     _events: Option<Task<()>>,
     _prepare: Option<Task<()>>,
     _clock: Task<()>,
@@ -122,18 +129,7 @@ impl AgentRun {
         } = setup;
         let model = request.choices.model.clone();
         let effort = request.choices.effort.clone();
-        let clock = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(Duration::from_secs(1)).await;
-                let running = this.update(cx, |this, cx| {
-                    cx.notify();
-                    !this.state.is_over()
-                });
-                if !matches!(running, Ok(true)) {
-                    break;
-                }
-            }
-        });
+        let clock = Self::clock(cx);
         let store = cx.stores().pull_requests().clone();
         let reviewing_key = key.clone();
         let reviewing_agent = agent.clone();
@@ -168,6 +164,9 @@ impl AgentRun {
             auto_add,
             started: Instant::now(),
             control: None,
+            awaiting_reply: false,
+            reply_input: None,
+            summary_recorded: false,
             _events: None,
             _prepare: None,
             _clock: clock,
@@ -249,6 +248,22 @@ impl AgentRun {
             )
             .ok();
         }
+    }
+
+    /// Redraws every second while the run is going, for its elapsed time.
+    fn clock(cx: &mut Context<Self>) -> Task<()> {
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                let running = this.update(cx, |this, cx| {
+                    cx.notify();
+                    !this.state.is_over()
+                });
+                if !matches!(running, Ok(true)) {
+                    break;
+                }
+            }
+        })
     }
 
     /// Starts the agent and follows its events.
@@ -378,10 +393,92 @@ impl AgentRun {
         cx.notify();
     }
 
-    /// Asks the agent to stop.
+    /// Whether the agent's turn ended and its session takes a reply.
+    pub fn can_reply(&self) -> bool {
+        self.awaiting_reply
+    }
+
+    /// The field the reviewer replies to the agent in. ⌘↩ sends it.
+    pub fn reply_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<TextareaState> {
+        if let Some(input) = &self.reply_input {
+            return input.clone();
+        }
+        let input = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .placeholder("Reply to the agent… ⌘↩ sends")
+                .rows(2)
+                .context_menu(false)
+        });
+        cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
+            if let InputEvent::PressEnter {
+                secondary: true, ..
+            } = event
+            {
+                this.send_reply(window, cx);
+            }
+        })
+        .detach();
+        self.reply_input = Some(input.clone());
+        input
+    }
+
+    /// Sends what the reviewer wrote as the session's next prompt, and shows it above
+    /// the agent's answer.
+    pub fn send_reply(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(input) = self.reply_input.clone() else {
+            return;
+        };
+        let text = input.read(cx).value().trim().to_string();
+        if text.is_empty() || !self.awaiting_reply {
+            return;
+        }
+        let sent = self
+            .control
+            .as_ref()
+            .is_some_and(|control| control.follow_up(text.clone()));
+        if !sent {
+            self.awaiting_reply = false;
+            cx.notify();
+            return;
+        }
+        self.log(format_args!(
+            "follow-up\n--- reply ---\n{text}\n--- end of reply ---"
+        ));
+        input.update(cx, |input, cx| input.set_value("", window, cx));
+        self.awaiting_reply = false;
+        let quoted: Vec<String> = text.lines().map(|line| format!("> {line}")).collect();
+        if !self.message.trim().is_empty() {
+            self.message.push_str("\n\n");
+        }
+        self.message.push_str(&quoted.join("\n"));
+        self.message.push_str("\n\n");
+        self.message_break = false;
+        self.finished_after = None;
+        self.state = RunState::Running;
+        let key = self.key.clone();
+        let agent = self.agent.clone();
+        cx.stores().pull_requests().clone().update(cx, |store, cx| {
+            store.set_agent_reviewing(&key, &agent, true, cx)
+        });
+        self._clock = Self::clock(cx);
+        cx.notify();
+    }
+
+    /// Asks the agent to stop. A session waiting for a reply ends.
     pub fn stop(&mut self, cx: &mut Context<Self>) {
         if let Some(prompt) = self.permission.take() {
             prompt.respond(Decision::Deny);
+        }
+        if std::mem::take(&mut self.awaiting_reply) {
+            if let Some(control) = &mut self.control {
+                control.cancel();
+            }
+            cx.notify();
+            return;
         }
         match &mut self.control {
             Some(control) => {
@@ -399,6 +496,10 @@ impl AgentRun {
 
     /// Removes the run from the pull request's reviews.
     pub fn dismiss(&mut self, cx: &mut Context<Self>) {
+        self.awaiting_reply = false;
+        if let Some(control) = &mut self.control {
+            control.cancel();
+        }
         let key = self.key.clone();
         let this = cx.entity();
         crate::remove_run(&key, &this, cx);
@@ -546,8 +647,20 @@ impl AgentRun {
             }
             // Only a question about selected lines asks for a comment.
             AgentEvent::Suggestion(_) => {}
-            AgentEvent::Finished(outcome) => self.finish(outcome, cx),
+            AgentEvent::TurnEnded(outcome) => {
+                self.finish(outcome, cx);
+                self.awaiting_reply =
+                    self.control.is_some() && !matches!(self.state, RunState::Failed(_));
+            }
+            AgentEvent::Finished(outcome) => {
+                self.awaiting_reply = false;
+                // A session stopped while it waited for a reply already showed its turn.
+                if !self.state.is_over() {
+                    self.finish(outcome, cx);
+                }
+            }
             AgentEvent::Failed(message) => {
+                self.awaiting_reply = false;
                 self.permission = None;
                 self.finished_after = Some(self.started.elapsed());
                 self.state = RunState::Failed(message);
@@ -584,7 +697,13 @@ impl AgentRun {
         let store = cx.stores().pull_requests().clone();
         self.state = match outcome {
             RunOutcome::Completed | RunOutcome::Truncated => {
-                store.update(cx, |store, cx| store.finish_agent_review(&key, summary, cx));
+                if std::mem::replace(&mut self.summary_recorded, true) {
+                    store.update(cx, |store, cx| {
+                        store.set_agent_reviewing(&key, &agent, false, cx)
+                    });
+                } else {
+                    store.update(cx, |store, cx| store.finish_agent_review(&key, summary, cx));
+                }
                 RunState::Finished(outcome)
             }
             RunOutcome::Cancelled => {

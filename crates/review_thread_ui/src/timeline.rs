@@ -159,6 +159,7 @@ impl ReviewThreadView {
         self.sync_rows(cx);
         div()
             .id("timeline")
+            .test_support()
             .flex_1()
             .min_h_0()
             .capture_any_mouse_up(
