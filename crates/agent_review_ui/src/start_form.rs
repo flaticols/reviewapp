@@ -492,7 +492,8 @@ pub fn start_review(
         SessionChoices::new(agent.model.clone(), agent.effort.clone()).asking_before_commands(ask);
     let mut request = ReviewRequest::new(launch_command(&agent), cwd, prompt)
         .with_env("PATH", path)
-        .with_choices(choices);
+        .with_choices(choices)
+        .with_follow_ups();
     if let Some(program) = options.findings_server {
         request = request.with_findings_server(program);
     }

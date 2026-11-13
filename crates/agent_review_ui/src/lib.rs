@@ -34,13 +34,17 @@ pub struct AgentRuns {
 
 impl Global for AgentRuns {}
 
-/// Runs for `key` in progress, or failed and not dismissed, oldest first.
+/// Runs for `key` in progress, waiting for the reviewer's reply, or failed and not
+/// dismissed, oldest first.
 pub fn active_runs(key: &PullRequestKey, cx: &App) -> Vec<Entity<AgentRun>> {
     cx.try_global::<AgentRuns>()
         .and_then(|runs| runs.runs.get(key))
         .map(|runs| {
             runs.iter()
-                .filter(|run| !matches!(run.read(cx).state(), RunState::Finished(_)))
+                .filter(|run| {
+                    let run = run.read(cx);
+                    !matches!(run.state(), RunState::Finished(_)) || run.can_reply()
+                })
                 .cloned()
                 .collect()
         })

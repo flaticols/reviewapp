@@ -77,6 +77,7 @@ fn review_run_streams_tools_permission_and_findings() {
             AgentEvent::Message(chunk) => message.push_str(&chunk),
             AgentEvent::Thought(_) => {}
             AgentEvent::Plan(steps) => plans.push(steps),
+            AgentEvent::TurnEnded(_) => panic!("a run without follow-ups ends with its turn"),
             AgentEvent::Finished(outcome) => break Ok(outcome),
             AgentEvent::Failed(error) => break Err(error),
         }
@@ -204,4 +205,65 @@ fn a_question_streams_the_answer_and_a_suggested_comment() {
         suggestion.as_deref(),
         Some("Could the re-anchoring move into `apply_push` itself, so no caller can forget it?")
     );
+}
+
+#[test]
+fn a_session_with_follow_ups_answers_in_the_same_session_until_stopped() {
+    let agent = env!("CARGO_BIN_EXE_acp-mock-agent");
+    let request = ReviewRequest::new(format!("'{agent}'"), std::env::temp_dir(), "Review this.")
+        .with_follow_ups();
+    let (future, events, mut control) = acp_client::start_review(request);
+    let session = std::thread::spawn(move || futures::executor::block_on(future));
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut turns = Vec::new();
+    let mut message = String::new();
+    let outcome = loop {
+        assert!(Instant::now() < deadline, "the session timed out");
+        match events
+            .recv_blocking()
+            .expect("the session reports until it ends")
+        {
+            AgentEvent::Permission(prompt) => prompt.respond(Decision::AllowOnce),
+            AgentEvent::Message(chunk) => message.push_str(&chunk),
+            AgentEvent::TurnEnded(outcome) => {
+                turns.push((outcome, std::mem::take(&mut message)));
+                match turns.len() {
+                    1 => assert!(control.follow_up("Why line 31?")),
+                    2 => control.cancel(),
+                    _ => panic!("a stopped session takes no more turns"),
+                }
+            }
+            AgentEvent::Finished(outcome) => break outcome,
+            AgentEvent::Failed(error) => panic!("{error}"),
+            _ => {}
+        }
+    };
+    assert_eq!(turns.len(), 2);
+    assert!(
+        turns
+            .iter()
+            .all(|(outcome, _)| *outcome == RunOutcome::Completed)
+    );
+    assert_eq!(
+        turns[1].1, "Turn 2 in mock-session: Why line 31?",
+        "the follow-up reaches the same agent session"
+    );
+    assert_eq!(
+        outcome,
+        RunOutcome::Completed,
+        "stopping while idle keeps the last outcome"
+    );
+    assert!(
+        !control.follow_up("Anyone there?"),
+        "an ended session takes no follow-ups"
+    );
+    let ended = Instant::now() + Duration::from_secs(10);
+    while !session.is_finished() {
+        assert!(
+            Instant::now() < ended,
+            "the session future ends after a stop"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }

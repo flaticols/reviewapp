@@ -293,6 +293,8 @@ impl AgentQuestion {
                     self.state = RunState::AwaitingPermission;
                 }
             }
+            // Questions don't ask for follow-ups, so no turn ends without the session.
+            AgentEvent::TurnEnded(_) => {}
             AgentEvent::Suggestion(body) => {
                 let body = body.trim();
                 if !body.is_empty() {

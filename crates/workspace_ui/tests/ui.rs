@@ -1811,3 +1811,136 @@ fn agents_run_read_only_commands_unasked_once_the_setting_allows_it(cx: &mut Tes
     })
     .unwrap();
 }
+
+#[gpui_kit::test]
+fn the_reviewer_replies_to_an_agent_in_the_same_session(cx: &mut TestAppContext) {
+    use acp_client::{AgentEvent, RunControl, RunOutcome};
+    let (agent, events) = async_channel::unbounded::<AgentEvent>();
+    let (control, follow_ups) = RunControl::scripted();
+    let launch = std::cell::RefCell::new(Some((events, control)));
+    cx.update(|cx| {
+        cx.set_global(agent_review_ui::AgentLauncher::new(move |_, _| {
+            let (events, control) = launch.borrow_mut().take().expect("one review starts");
+            (events, Some(control))
+        }))
+    });
+    for event in [
+        AgentEvent::Connected {
+            name: None,
+            version: None,
+        },
+        AgentEvent::Message("One finding in `hunk.rs`.".into()),
+        AgentEvent::TurnEnded(RunOutcome::Completed),
+    ] {
+        agent.try_send(event).unwrap();
+    }
+    let (window, _) = open_featured(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.press("cmd-shift-a", cx);
+    })
+    .unwrap();
+    settle(window, "start-review", cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("start-review", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let id = cx.update(|cx| {
+        agent_review_ui::active_runs(&featured(), cx)
+            .first()
+            .expect("the run waits for a reply")
+            .entity_id()
+            .as_u64()
+    });
+    let input = format!("agent-reply-input-{id}");
+    let send = format!("send-agent-reply-{id}");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            on_screen(window, input.clone()),
+            "a finished turn offers a reply to the agent"
+        );
+        window.click(input.clone(), cx);
+        window.input("Is line 31 safe?", cx);
+        window.press("cmd-enter", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        follow_ups.try_recv().as_deref(),
+        Ok("Is line 31 safe?"),
+        "the reply goes to the same session"
+    );
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            !on_screen(window, send.clone()),
+            "no reply while the agent answers"
+        );
+    })
+    .unwrap();
+
+    for event in [
+        AgentEvent::Message("Yes, the guard covers it.".into()),
+        AgentEvent::TurnEnded(RunOutcome::Completed),
+    ] {
+        agent.try_send(event).unwrap();
+    }
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            on_screen(window, send.clone()),
+            "the answer ends a turn, so another reply is possible"
+        );
+        window.click(
+            gpui_kit::ElementId::NamedInteger("timeline-filter".into(), 0),
+            cx,
+        );
+    })
+    .unwrap();
+    cx.run_until_parked();
+    // The run's card sits at the end of the thread, below everything else.
+    for _ in 0..6 {
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.scroll(
+                "timeline",
+                gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-4000.))),
+                cx,
+            );
+        })
+        .unwrap();
+        cx.run_until_parked();
+        let shown = cx
+            .update_window(window, |_, window, cx| {
+                window.render_frame(cx);
+                on_screen(window, send.clone())
+            })
+            .unwrap();
+        if shown {
+            break;
+        }
+    }
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            on_screen(window, send.clone()),
+            "the thread keeps the run's card, with its reply, while the agent waits"
+        );
+        window.click(format!("dismiss-run-{id}"), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(
+        follow_ups.is_closed(),
+        "dismissing the run ends the agent's session"
+    );
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(!on_screen(window, send.clone()), "the run is gone");
+    })
+    .unwrap();
+}

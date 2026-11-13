@@ -78,13 +78,14 @@ enum Scene {
     AgentRun,
     /// The Reviews tab during the mock agent's run.
     ReviewsTab,
+    AgentReply,
     /// A real review by the default agent, run to the end. Only with `--live`, and only
     /// when named, since it uses the agent's quota.
     LiveReview,
 }
 
 impl Scene {
-    const ALL: [Scene; 36] = [
+    const ALL: [Scene; 37] = [
         Self::List,
         Self::OneCommit,
         Self::RowMenu,
@@ -120,6 +121,7 @@ impl Scene {
         Self::GoToFile,
         Self::AgentRun,
         Self::ReviewsTab,
+        Self::AgentReply,
         Self::LiveReview,
     ];
 
@@ -160,6 +162,7 @@ impl Scene {
             Self::GoToFile => "08b-go-to-file",
             Self::AgentRun => "05-agent-running",
             Self::ReviewsTab => "05b-reviews-tab",
+            Self::AgentReply => "05c-agent-reply",
             Self::LiveReview => "09-live-review",
         }
     }
@@ -326,7 +329,7 @@ fn render(
     cx.update_window(window.into(), |_, window, cx| {
         let opens_review = matches!(
             scene,
-            Scene::AgentRun | Scene::ReviewsTab | Scene::LiveReview
+            Scene::AgentRun | Scene::ReviewsTab | Scene::LiveReview | Scene::AgentReply
         ) || matches!(
             scene,
             Scene::Thread
@@ -520,6 +523,39 @@ fn render(
                 });
             }
         }
+        Scene::AgentReply => {
+            use acp_client::{AgentEvent, RunControl, RunOutcome};
+            cx.set_global(agent_review_ui::AgentLauncher::new(|_, _| {
+                let (sender, receiver) = async_channel::unbounded();
+                for event in [
+                    AgentEvent::Connected {
+                        name: None,
+                        version: None,
+                    },
+                    AgentEvent::Message(
+                        "One question before I flag it: is `reanchor_threads` meant to run before `entry().or_insert`? If a hunk moves, its thread keeps the old anchor until the next push.".into(),
+                    ),
+                    AgentEvent::TurnEnded(RunOutcome::Completed),
+                ] {
+                    sender.try_send(event).ok();
+                }
+                let (control, _) = RunControl::scripted();
+                (receiver, Some(control))
+            }));
+            let agent = settings_model::AgentConfig::new(
+                "claude-code",
+                "Claude Code",
+                "claude-agent-acp",
+                Vec::new(),
+            );
+            agent_review_ui::start_review(
+                target.clone(),
+                agent,
+                agent_review_ui::StartOptions::new(),
+                window,
+                cx,
+            );
+        }
         Scene::AgentRun | Scene::ReviewsTab => {
             let bin = std::env::current_exe()
                 .ok()
@@ -619,16 +655,19 @@ fn render(
             }
         })?;
     }
-    if matches!(scene, Scene::AgentRun | Scene::ReviewsTab) {
+    if matches!(
+        scene,
+        Scene::AgentRun | Scene::ReviewsTab | Scene::AgentReply
+    ) {
         // The mock agent runs as a real process; give it time to read files and ask.
-        for _ in 0..30 {
+        for _ in 0..if scene == Scene::AgentReply { 1 } else { 30 } {
             std::thread::sleep(std::time::Duration::from_millis(100));
             cx.run_until_parked();
         }
         cx.update_window(window.into(), |_, _, cx| {
             if let Some(review) = workspace.read(cx).review_view(cx) {
                 review.update(cx, |review, cx| {
-                    if scene == Scene::ReviewsTab {
+                    if matches!(scene, Scene::ReviewsTab | Scene::AgentReply) {
                         review.show_filter(review_thread_ui::TimelineFilter::Reviews, cx)
                     } else {
                         review.scroll_to_end(cx)

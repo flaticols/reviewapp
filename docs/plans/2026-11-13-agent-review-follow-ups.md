@@ -1,6 +1,6 @@
 ---
 title: Fewer permission prompts and follow-ups in agent reviews
-phase: active
+phase: done
 session: 63ebd6b8-aeba-4dc6-84e1-44fe795dd193
 ticket:
 updated: 2026-11-13
@@ -33,12 +33,14 @@ Verified: `cargo test -p agent_review_ui` → 6 passed; `agents_run_read_only_co
 ### 2. Follow-up turns in the same session
 Files: crates/acp_client/src/session.rs, crates/acp_client/src/bin/acp-mock-agent.rs, crates/acp_client/tests/mock_agent.rs, crates/agent_review_ui/src/run.rs, crates/agent_review_ui/src/run_card.rs
 Accept: mock-agent test shows the second prompt on the same session id and the process ending on stop; UI gate for the reply box; scene added.
-Verified:
+Verified: `a_session_with_follow_ups_answers_in_the_same_session_until_stopped` (mock agent over real ACP) gets "Turn 2 in mock-session: Why line 31?" and the session future ends after a stop; `the_reviewer_replies_to_an_agent_in_the_same_session` passes and fails with "a finished turn offers a reply to the agent" (Reviews tab) and "the thread keeps the run's card, with its reply, while the agent waits" (Everything) when the reply box is removed; scene target/screenshots/05c-agent-reply-dark.png.
 
 ### 3. Full checks
 Accept: `cargo test --workspace`, clippy on changed crates, `git diff --check`.
-Verified:
+Verified: `cargo test --workspace` → all passed; clippy on acp_client, agent_review_ui, review_thread_ui, screenshots_ui, workspace_ui, settings_* → no new warnings; `git diff --check` clean.
 
 ## Log
 - 2026-11-13: started; scope confirmed with the user (read-only commands, reply after a turn).
 - 2026-11-13: added `sed s///` (without `w`/`e` flags) and awk `>=` after the log scan showed them in read-only pipelines.
+- 2026-11-13: the timeline is a virtual list, so the UI test scrolls `timeline` (now observable) to reach the run card.
+- 2026-11-13: the agent process ending on stop is shown by the run future finishing; the process kill itself is the existing drop path, not separately asserted.
