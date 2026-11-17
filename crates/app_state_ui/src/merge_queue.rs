@@ -8,7 +8,7 @@ use std::time::Duration;
 use github_api::{ApiError, PullRequestSource};
 use gpui_kit::{App, AppContext as _, Context, Entity, EventEmitter, Task};
 use pr_model::{PullRequestKey, RepoSlug};
-use review_model::MergeStatus;
+use review_model::{AutoMerge, MergeStatus};
 use settings_model::Preferences;
 
 use crate::SettingsStore;
@@ -271,8 +271,24 @@ impl MergeQueue {
         match result {
             Ok(()) => {
                 self.errors.remove(key);
-                if let Action::Rebase { head_sha, .. } = action {
-                    self.rebased_from.insert(key.clone(), head_sha.clone());
+                // Until GitHub is asked again, remember what changed, so removing a pull
+                // request right away still turns its auto-merge off.
+                let viewer = self.viewer(cx);
+                match action {
+                    Action::Rebase { head_sha, .. } => {
+                        self.rebased_from.insert(key.clone(), head_sha.clone());
+                    }
+                    Action::EnableAutoMerge { method, .. } => {
+                        if let Some(status) = self.statuses.get_mut(key) {
+                            status.merge.auto_merge = Some(AutoMerge::new(*method, viewer));
+                        }
+                    }
+                    Action::DisableAutoMerge { .. } => {
+                        if let Some(status) = self.statuses.get_mut(key) {
+                            status.merge.auto_merge = None;
+                        }
+                    }
+                    Action::Merge { .. } | Action::Remove { .. } => {}
                 }
             }
             Err(error) => {

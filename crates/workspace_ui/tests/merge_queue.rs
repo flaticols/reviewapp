@@ -210,6 +210,19 @@ fn removing_turns_off_viewer_auto_merge(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn removing_right_after_the_queue_turned_on_auto_merge_turns_it_off(cx: &mut TestAppContext) {
+    let harness = Harness::new(&[1], vec![running(status(1, MergeState::Blocked))], cx);
+    harness.tick(cx);
+    assert_eq!(harness.count("auto-merge N1 squash"), 1);
+    // GitHub hasn't been asked again, so the last answer still shows auto-merge off.
+    harness
+        .queue
+        .update(cx, |queue, cx| queue.remove(&key(1), cx));
+    cx.run_until_parked();
+    assert_eq!(harness.count("auto-merge N1 off"), 1);
+}
+
+#[gpui_kit::test]
 fn adding_queues_and_works_it(cx: &mut TestAppContext) {
     let harness = Harness::new(&[], vec![status(1, MergeState::Behind)], cx);
     harness.queue.update(cx, |queue, cx| queue.add(key(1), cx));
