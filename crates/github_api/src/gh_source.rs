@@ -1163,7 +1163,10 @@ impl PullRequestSource for GhSource {
             return Ok(Vec::new());
         }
         let (query, variables) = merge_status_query(keys);
-        Ok(parse_merge_statuses(keys, &self.graphql(&query, variables)?))
+        Ok(parse_merge_statuses(
+            keys,
+            &self.graphql(&query, variables)?,
+        ))
     }
 
     fn set_open(&self, key: &PullRequestKey, open: bool) -> Result<(), ApiError> {
@@ -1410,7 +1413,8 @@ mod tests {
 
     #[test]
     fn failed_required_status_context_fails() {
-        let contexts = json!([{ "__typename": "StatusContext", "state": "ERROR", "isRequired": true }]);
+        let contexts =
+            json!([{ "__typename": "StatusContext", "state": "ERROR", "isRequired": true }]);
         let data = alias("OPEN", "APPROVED", contexts);
         assert_eq!(statuses(data)[0].required_checks, CheckStatus::Failed);
     }
@@ -1450,7 +1454,10 @@ mod tests {
         });
         let found = parse_merge_statuses(&[queued(1), queued(2)], &data);
         assert_eq!(
-            found.iter().map(|status| status.key.clone()).collect::<Vec<_>>(),
+            found
+                .iter()
+                .map(|status| status.key.clone())
+                .collect::<Vec<_>>(),
             [queued(1)]
         );
     }

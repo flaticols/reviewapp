@@ -57,7 +57,8 @@ impl Harness {
         let mut file =
             fixtures::sample(Timestamp::now(), std::path::Path::new("/Users/test")).settings;
         file.preferences.merge_queue = queued.iter().map(|n| key(*n).id()).collect();
-        let settings = cx.update(|cx| cx.new(|cx| SettingsStore::new(file, None, None, Vec::new(), cx)));
+        let settings =
+            cx.update(|cx| cx.new(|cx| SettingsStore::new(file, None, None, Vec::new(), cx)));
         let dyn_source: Arc<dyn github_api::PullRequestSource> = source.clone();
         let queue = cx.update(|cx| cx.new(|cx| MergeQueue::new(dyn_source, settings.clone(), cx)));
         let events = Rc::new(RefCell::new(Vec::new()));
@@ -131,7 +132,9 @@ fn fetch_failure_keeps_rows(cx: &mut TestAppContext) {
     let harness = Harness::new(&[1], vec![status(1, MergeState::Dirty)], cx);
     harness.tick(cx);
     harness.source.fail_merge_statuses(true);
-    harness.source.set_merge_status(status(1, MergeState::Clean));
+    harness
+        .source
+        .set_merge_status(status(1, MergeState::Clean));
     harness.tick(cx);
     assert_eq!(harness.row(1, cx), RowState::Skipped(Skip::Conflicts));
     assert!(harness.source.actions().is_empty());
@@ -163,7 +166,10 @@ fn moving_up_takes_over_in_flight(cx: &mut TestAppContext) {
     assert_eq!(harness.count("auto-merge N1 squash"), 1);
     harness
         .source
-        .set_merge_status(with_viewer_auto_merge(running(status(1, MergeState::Blocked))));
+        .set_merge_status(with_viewer_auto_merge(running(status(
+            1,
+            MergeState::Blocked,
+        ))));
     harness
         .queue
         .update(cx, |queue, cx| queue.move_by(&key(2), true, cx));
@@ -188,7 +194,10 @@ fn overlapping_ticks_rebase_once(cx: &mut TestAppContext) {
 fn removing_turns_off_viewer_auto_merge(cx: &mut TestAppContext) {
     let harness = Harness::new(
         &[1],
-        vec![with_viewer_auto_merge(running(status(1, MergeState::Blocked)))],
+        vec![with_viewer_auto_merge(running(status(
+            1,
+            MergeState::Blocked,
+        )))],
         cx,
     );
     harness.tick(cx);

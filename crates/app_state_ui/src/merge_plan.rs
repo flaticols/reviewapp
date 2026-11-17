@@ -152,7 +152,11 @@ pub(crate) fn plan_repository(
     };
     let active = in_flight
         .filter(|key| can_go(key))
-        .or_else(|| live.iter().find(|(_, _, skip)| skip.is_none()).map(|(key, ..)| *key))
+        .or_else(|| {
+            live.iter()
+                .find(|(_, _, skip)| skip.is_none())
+                .map(|(key, ..)| *key)
+        })
         .cloned();
 
     for (key, status, _) in &live {
@@ -232,7 +236,14 @@ fn step(status: &MergeStatus, rebased_from: Option<&String>) -> (Activity, Optio
         ),
         _ if merge.auto_merge.is_some() => {
             let checks_in = !status.needs_review && status.required_checks == CheckStatus::Passed;
-            (if checks_in { Activity::AutoMergeOn } else { waiting }, None)
+            (
+                if checks_in {
+                    Activity::AutoMergeOn
+                } else {
+                    waiting
+                },
+                None,
+            )
         }
         (state, Some(method)) if state.can_merge() => (
             Activity::Merging,
@@ -351,7 +362,13 @@ mod tests {
         let plan = plan(&[1, 2], vec![status(1, Merged, Unknown), open(2, Behind)]);
         assert_eq!(
             plan.actions,
-            [Action::Remove { key: key(1), merged: true }, rebase(2)]
+            [
+                Action::Remove {
+                    key: key(1),
+                    merged: true
+                },
+                rebase(2)
+            ]
         );
         assert_eq!(rows(&plan), [RowState::Active(Activity::Rebasing)]);
     }
@@ -359,7 +376,13 @@ mod tests {
     #[test]
     fn closed_head_is_removed_unmerged() {
         let plan = plan(&[1], vec![status(1, Closed, Unknown)]);
-        assert_eq!(plan.actions, [Action::Remove { key: key(1), merged: false }]);
+        assert_eq!(
+            plan.actions,
+            [Action::Remove {
+                key: key(1),
+                merged: false
+            }]
+        );
     }
 
     #[test]
@@ -396,7 +419,10 @@ mod tests {
 
     #[test]
     fn blocked_head_turns_on_auto_merge() {
-        let plan = plan(&[1], vec![with_checks(open(1, Blocked), CheckStatus::Running)]);
+        let plan = plan(
+            &[1],
+            vec![with_checks(open(1, Blocked), CheckStatus::Running)],
+        );
         assert_eq!(
             plan.actions,
             [Action::EnableAutoMerge {
@@ -414,7 +440,10 @@ mod tests {
         head.needs_review = true;
         let plan = plan(&[1], vec![head]);
         assert_eq!(plan.actions, []);
-        assert_eq!(rows(&plan), [RowState::Active(Activity::WaitingForApproval)]);
+        assert_eq!(
+            rows(&plan),
+            [RowState::Active(Activity::WaitingForApproval)]
+        );
     }
 
     #[test]
@@ -427,7 +456,10 @@ mod tests {
     fn failed_ci_skips_to_next() {
         let plan = plan(
             &[1, 2],
-            vec![with_checks(open(1, Blocked), CheckStatus::Failed), open(2, Behind)],
+            vec![
+                with_checks(open(1, Blocked), CheckStatus::Failed),
+                open(2, Behind),
+            ],
         );
         assert_eq!(plan.actions, [rebase(2)]);
         assert_eq!(
@@ -446,7 +478,12 @@ mod tests {
         stuck.merge.can_update_branch = false;
         let plan = plan(
             &[1, 2, 3, 4],
-            vec![open(1, Dirty), status(2, Draft, Blocked), stuck, open(4, Clean)],
+            vec![
+                open(1, Dirty),
+                status(2, Draft, Blocked),
+                stuck,
+                open(4, Clean),
+            ],
         );
         assert_eq!(plan.actions, [merge(4)]);
         assert_eq!(
@@ -523,8 +560,14 @@ mod tests {
 
     #[test]
     fn row_labels_read_as_the_sidebar_shows_them() {
-        assert_eq!(RowState::Skipped(Skip::CiFailed).label(), "Skipped: CI failed");
-        assert_eq!(RowState::Active(Activity::WaitingForCi).label(), "Waiting for CI");
+        assert_eq!(
+            RowState::Skipped(Skip::CiFailed).label(),
+            "Skipped: CI failed"
+        );
+        assert_eq!(
+            RowState::Active(Activity::WaitingForCi).label(),
+            "Waiting for CI"
+        );
         assert_eq!(RowState::Queued.label(), "Queued");
     }
 }

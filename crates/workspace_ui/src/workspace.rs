@@ -1,15 +1,17 @@
 mod zed;
 
-use app_state_ui::StoresExt as _;
 use app_state_ui::actions::{
     CloseWindow, FocusSearch, GoBack, OpenSettings, Quit, Refresh, ResetZoom, ZoomIn, ZoomOut,
 };
+use app_state_ui::{MergeQueueEvent, StoresExt as _};
 use chrome_ui::{AppStatusBar, AppTitleBar};
-use gpui_kit::component::{ActiveTheme as _, v_flex};
+use gpui_kit::component::notification::{Notification, NotificationType};
+use gpui_kit::component::{ActiveTheme as _, WindowExt as _, v_flex};
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Entity, Focusable as _, InteractiveElement as _,
     IntoElement, KeyBinding, MouseButton, NavigationDirection, ParentElement as _, PinchEvent,
-    Render, SharedString, Styled as _, Subscription, TouchPhase, Window, div,
+    Render, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription,
+    TestSupportExt as _, TouchPhase, Window, div,
     prelude::FluentBuilder as _,
 };
 use haptics_ui::Haptic;
@@ -54,6 +56,47 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &Quit, cx| cx.quit());
 }
 
+/// What the merge queue did, as a notification. Each pull request gets its own, so
+/// news about one doesn't replace news about another.
+fn merge_queue_notice(event: &MergeQueueEvent) -> Notification {
+    let (kind, key, text) = match event {
+        MergeQueueEvent::Merged(key) => (
+            NotificationType::Success,
+            key,
+            format!("#{} merged", key.number()),
+        ),
+        MergeQueueEvent::Closed(key) => (
+            NotificationType::Warning,
+            key,
+            format!("#{} was closed and left the merge queue", key.number()),
+        ),
+        MergeQueueEvent::Skipped(key, skip) => (
+            NotificationType::Warning,
+            key,
+            format!("#{} skipped: {}", key.number(), skip.label()),
+        ),
+        MergeQueueEvent::Failed(key, message) => (
+            NotificationType::Error,
+            key,
+            format!("#{}: {message}", key.number()),
+        ),
+    };
+    let text = SharedString::from(text);
+    let id = SharedString::from(format!("merge-queue-notice-{}", key.id()));
+    Notification::new()
+        .id1::<MergeQueueEvent>(id.clone())
+        .with_type(kind)
+        .content(move |_, _, _| {
+            div()
+                .id(id.clone())
+                .aria_label(text.clone())
+                .test_support()
+                .text_sm()
+                .child(text.clone())
+                .into_any_element()
+        })
+}
+
 /// The screen the window shows.
 enum Route {
     SignIn(Entity<SignInView>),
@@ -95,6 +138,13 @@ impl Workspace {
                     _ => cx.notify(),
                 }
             }),
+            cx.subscribe_in(
+                &cx.stores().merge_queue().clone(),
+                window,
+                |_, _, event: &MergeQueueEvent, window, cx| {
+                    window.push_notification(merge_queue_notice(event), cx)
+                },
+            ),
             cx.subscribe_in(
                 &pull_request_list,
                 window,

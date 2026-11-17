@@ -101,11 +101,15 @@ enum Scene {
     /// A real review by the default agent, run to the end. Only with `--live`, and only
     /// when named, since it uses the agent's quota.
     LiveReview,
+    /// The list with three pull requests in Switchfold's own merge queue, after its
+    /// first tick.
+    QueueSidebar,
 }
 
 impl Scene {
-    const ALL: [Scene; 47] = [
+    const ALL: [Scene; 48] = [
         Self::List,
+        Self::QueueSidebar,
         Self::OneCommit,
         Self::RowMenu,
         Self::FilterMenu,
@@ -203,6 +207,7 @@ impl Scene {
             Self::ReviewsTab => "05b-reviews-tab",
             Self::AgentReply => "05c-agent-reply",
             Self::LiveReview => "09-live-review",
+            Self::QueueSidebar => "01f-queue-sidebar",
         }
     }
 }
@@ -321,6 +326,24 @@ fn render(
             settings.update(cx, |settings, cx| {
                 settings.update_preferences(cx, |p| *p = saved)
             });
+        }
+        if scene == Scene::QueueSidebar {
+            use app_state_ui::StoresExt as _;
+            cx.stores().settings().clone().update(cx, |settings, cx| {
+                settings.update_preferences(cx, |p| {
+                    for id in [
+                        "flaticols/switchfold#482",
+                        "flaticols/switchfold#479",
+                        "flaticols/gathering-app#121",
+                    ] {
+                        p.set_queued(id, true);
+                    }
+                })
+            });
+            cx.stores()
+                .merge_queue()
+                .clone()
+                .update(cx, |queue, cx| queue.tick(cx));
         }
         if scene == Scene::InspectorHidden {
             use app_state_ui::StoresExt as _;

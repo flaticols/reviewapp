@@ -103,9 +103,11 @@ impl PullRequestList {
         });
         let store = cx.stores().pull_requests().clone();
         let settings = cx.stores().settings().clone();
+        let merge_queue = cx.stores().merge_queue().clone();
         let mut subscriptions = vec![
             cx.observe(&store, |_, _, cx| cx.notify()),
             cx.observe(&settings, |_, _, cx| cx.notify()),
+            cx.observe(&merge_queue, |_, _, cx| cx.notify()),
             cx.subscribe(
                 &filter_input,
                 |this: &mut Self, input, event: &InputEvent, cx| {
@@ -386,6 +388,7 @@ impl PullRequestList {
                     .map(|(repo, count)| item(repo.clone(), *count, cx)),
             )
         };
+        let queue_menu = merge_queue_menu(prs, view.clone(), cx);
         let grouped = preferences.group_repositories_by_owner;
         let menu_add = view.clone();
 
@@ -395,6 +398,12 @@ impl PullRequestList {
             .collapsible(SidebarCollapsible::None)
             .w_full()
             .child(sidebar::NavSection::new("Pull requests", inbox_menu));
+        if let Some(queue_menu) = queue_menu {
+            sidebar = sidebar.child(
+                sidebar::NavSection::new("Merge queue", queue_menu)
+                    .foldable(preferences.is_folded("Merge queue")),
+            );
+        }
         if !pinned.is_empty() {
             sidebar = sidebar.child(
                 sidebar::NavSection::new("Pinned", pinned_menu)
@@ -1016,6 +1025,88 @@ fn color_grid(
 type Chip = (&'static str, String, fn(&mut ListFilters));
 
 /// Sidebar labels at the design's 13 px chrome size; the component defaults to 14 px.
+/// The merge queue, one item per repository holding its queued pull requests in merge
+/// order, each with where it stands. `None` while nothing is queued.
+fn merge_queue_menu(
+    prs: &[PullRequest],
+    view: Entity<PullRequestList>,
+    cx: &App,
+) -> Option<SidebarMenu> {
+    let queue = cx.stores().merge_queue().read(cx);
+    let mut repositories: Vec<(RepoSlug, Vec<PullRequestKey>)> = Vec::new();
+    for key in queue.queue(cx) {
+        match repositories.iter_mut().find(|(repo, _)| repo == key.repo()) {
+            Some((_, keys)) => keys.push(key),
+            None => repositories.push((key.repo().clone(), vec![key])),
+        }
+    }
+    if repositories.is_empty() {
+        return None;
+    }
+    Some(
+        SidebarMenu::new().children(repositories.into_iter().map(|(repo, keys)| {
+            SidebarMenuItem::new(repo.name().clone())
+                .label_style(label_style())
+                .icon(Icon::new(IconName::FolderGit2))
+                .default_open(true)
+                .click_to_toggle(true)
+                .children(keys.into_iter().map(|key| {
+                    let title = match prs.iter().find(|pr| pr.key == key) {
+                        Some(pr) => format!("#{} {}", key.number(), pr.title),
+                        None => format!("#{}", key.number()),
+                    };
+                    let state = SharedString::from(queue.row(&key).label());
+                    let id = SharedString::from(format!("merge-queue-{}", key.id()));
+                    let name = SharedString::from(format!("{title} · {state}"));
+                    let view = view.clone();
+                    let open_key = key.clone();
+                    SidebarMenuItem::new(title)
+                        .label_style(label_style())
+                        .icon(Icon::new(IconName::GitPullRequest))
+                        .suffix(move |_, cx| {
+                            div()
+                                .id(id.clone())
+                                .aria_label(name.clone())
+                                .test_support()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(state.clone())
+                        })
+                        .on_click(move |_, _, cx| {
+                            let key = open_key.clone();
+                            view.update(cx, |_, cx| cx.emit(PullRequestListEvent::Open(key)))
+                        })
+                        .context_menu(move |menu, _, _| queued_row_menu(menu, &key))
+                }))
+        })),
+    )
+}
+
+/// Reorders or removes a queued pull request.
+fn queued_row_menu(menu: PopupMenu, key: &PullRequestKey) -> PopupMenu {
+    let move_item = |label: &'static str, icon: IconName, up: bool| {
+        let key = key.clone();
+        PopupMenuItem::new(label)
+            .icon(Icon::new(icon))
+            .on_click(move |_, _, cx| {
+                let queue = cx.stores().merge_queue().clone();
+                queue.update(cx, |queue, cx| queue.move_by(&key, up, cx))
+            })
+    };
+    let remove_key = key.clone();
+    menu.item(move_item("Move up", IconName::ArrowUp, true))
+        .item(move_item("Move down", IconName::ArrowDown, false))
+        .separator()
+        .item(
+            PopupMenuItem::new("Remove from merge queue")
+                .icon(Icon::new(IconName::Close))
+                .on_click(move |_, _, cx| {
+                    let queue = cx.stores().merge_queue().clone();
+                    queue.update(cx, |queue, cx| queue.remove(&remove_key, cx))
+                }),
+        )
+}
+
 fn label_style() -> StyleRefinement {
     StyleRefinement::default().text_ui()
 }

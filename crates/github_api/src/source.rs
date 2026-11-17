@@ -4,8 +4,8 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use pr_model::{PullRequest, PullRequestKey, RepoSlug};
 use pr_model::CheckStatus;
+use pr_model::{PullRequest, PullRequestKey, RepoSlug};
 use review_model::{
     Actor, CheckRun, LogLine, MergeMethod, MergeStatus, PullRequestDetail, ReviewVerdict,
 };
@@ -217,11 +217,7 @@ impl FixtureSource {
     /// The merge status the sample implies: its merge facts, state and CI.
     fn sample_merge_status(&self, key: &PullRequestKey) -> Option<MergeStatus> {
         let detail = self.details.get(key)?;
-        let mut status = MergeStatus::new(
-            key.clone(),
-            detail.summary.state,
-            detail.merge.clone()?,
-        );
+        let mut status = MergeStatus::new(key.clone(), detail.summary.state, detail.merge.clone()?);
         status.required_checks = match detail.summary.ci {
             Some(CheckStatus::Failed) => CheckStatus::Failed,
             Some(CheckStatus::Running | CheckStatus::Queued) => CheckStatus::Running,

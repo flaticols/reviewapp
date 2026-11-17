@@ -1604,14 +1604,19 @@ fn row_menu_labels(
         window.render_frame(cx);
         let menu = window.within("popup-menu");
         (0..40usize)
-            .map(|ix| menu.try_find(ix).and_then(|item| item.label().map(str::to_string)))
+            .map(|ix| {
+                menu.try_find(ix)
+                    .and_then(|item| item.label().map(str::to_string))
+            })
             .collect()
     })
     .unwrap()
 }
 
 fn menu_index(labels: &[Option<String>], label: &str) -> Option<usize> {
-    labels.iter().position(|item| item.as_deref() == Some(label))
+    labels
+        .iter()
+        .position(|item| item.as_deref() == Some(label))
 }
 
 fn merge_queue(cx: &mut TestAppContext) -> Vec<String> {
@@ -1641,10 +1646,115 @@ fn merge_queue_menu_adds_and_removes(cx: &mut TestAppContext) {
         None,
         "a queued pull request isn't offered to be queued again"
     );
-    let remove =
-        menu_index(&labels, "Remove from merge queue").expect("a queued pull request offers removal");
+    let remove = menu_index(&labels, "Remove from merge queue")
+        .expect("a queued pull request offers removal");
     pick_menu_item(window, remove, cx);
     assert!(merge_queue(cx).is_empty());
+}
+
+fn queue_featured_pair(cx: &mut TestAppContext) {
+    use app_state_ui::StoresExt as _;
+    let second = PullRequestKey::new(RepoSlug::new("flaticols", "switchfold"), 479);
+    cx.update(|cx| {
+        let settings = cx.stores().settings().clone();
+        settings.update(cx, |settings, cx| {
+            settings.update_preferences(cx, |p| {
+                p.set_queued(&featured().id(), true);
+                p.set_queued(&second.id(), true);
+            })
+        });
+    });
+    cx.run_until_parked();
+}
+
+/// Sidebar rows are named section-item-child; the merge queue is section 1, and its
+/// first repository holds the queued pull requests.
+const FIRST_QUEUED: &str = "1-0-0";
+
+/// The painted name and state of each queued switchfold row, top to bottom.
+fn merge_queue_rows(window: AnyWindowHandle, cx: &mut TestAppContext) -> Vec<String> {
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let mut rows: Vec<(gpui_kit::Pixels, String)> = [482, 479]
+            .into_iter()
+            .filter_map(|number| {
+                let row = window.try_find(format!("merge-queue-flaticols/switchfold#{number}"))?;
+                let label = row.label()?.to_string();
+                row.visible().then(|| (row.bounds().top(), label))
+            })
+            .collect();
+        rows.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        rows.into_iter().map(|(_, label)| label).collect()
+    })
+    .unwrap()
+}
+
+#[gpui_kit::test]
+fn merge_queue_section_lists_rows_in_order(cx: &mut TestAppContext) {
+    let (window, _) = open(cx);
+    assert!(
+        merge_queue_rows(window, cx).is_empty(),
+        "no merge queue rows until something is queued"
+    );
+    queue_featured_pair(cx);
+    assert_eq!(
+        merge_queue_rows(window, cx),
+        [
+            "#482 Render review thread as a single scroll with inline diffs · Queued",
+            "#479 ACP: stream agent findings as draft comments · Queued"
+        ],
+        "queued pull requests show in queue order"
+    );
+}
+
+#[gpui_kit::test]
+fn merge_queue_tells_when_it_skips_a_pull_request(cx: &mut TestAppContext) {
+    let (window, _) = open(cx);
+    // The sample has no merge data for #479 or #121, so the queue can't find them.
+    for row in ["flaticols/switchfold#479", "flaticols/gathering-app#121"] {
+        let labels = row_menu_labels(window, row, cx);
+        let add = menu_index(&labels, "Add to merge queue").expect("the menu offers to queue it");
+        pick_menu_item(window, add, cx);
+    }
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window
+                .find("merge-queue-notice-flaticols/switchfold#479")
+                .label(),
+            Some("#479 skipped: not found"),
+            "a skip shows as a notification, and a later one doesn't replace it"
+        );
+        assert_eq!(
+            window
+                .find("merge-queue-notice-flaticols/gathering-app#121")
+                .label(),
+            Some("#121 skipped: not found")
+        );
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn merge_queue_move_down_reorders_rows(cx: &mut TestAppContext) {
+    let (window, _) = open(cx);
+    queue_featured_pair(cx);
+    let labels = row_menu_labels(window, FIRST_QUEUED, cx);
+    let down = menu_index(&labels, "Move down").expect("a queued row offers Move down");
+    pick_menu_item(window, down, cx);
+    // Moving starts a tick, so the states after " · " depend on the sample's merge data.
+    let titles: Vec<String> = merge_queue_rows(window, cx)
+        .into_iter()
+        .map(|row| row.split(" · ").next().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(
+        titles,
+        [
+            "#479 ACP: stream agent findings as draft comments",
+            "#482 Render review thread as a single scroll with inline diffs"
+        ],
+        "Move down swaps the row with the next one"
+    );
 }
 
 #[gpui_kit::test]
