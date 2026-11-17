@@ -710,6 +710,35 @@ impl MergeInfo {
     }
 }
 
+/// Where a pull request stands for the merge queue: open or done, how it merges, and
+/// whether its required checks and reviews are in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct MergeStatus {
+    pub key: PullRequestKey,
+    /// Open, draft, merged or closed.
+    pub state: pr_model::PullRequestState,
+    pub merge: MergeInfo,
+    /// Passed, Failed or Running, counting required checks only.
+    pub required_checks: CheckStatus,
+    /// GitHub still wants an approval, or changes were requested.
+    pub needs_review: bool,
+}
+
+impl MergeStatus {
+    /// An open-or-done `state` with `merge`, its required checks passed and no review
+    /// outstanding.
+    pub fn new(key: PullRequestKey, state: pr_model::PullRequestState, merge: MergeInfo) -> Self {
+        Self {
+            key,
+            state,
+            merge,
+            required_checks: CheckStatus::Passed,
+            needs_review: false,
+        }
+    }
+}
+
 /// Everything the review screen shows about one pull request.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[non_exhaustive]
