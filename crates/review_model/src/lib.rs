@@ -2,7 +2,7 @@
 //! threads, agent findings, reviewers, checks and the timeline. No UI or I/O.
 
 use diff_model::FileDiff;
-use pr_model::{CheckStatus, PullRequest, PullRequestKey, Timestamp};
+use pr_model::{CheckStatus, PullRequest, PullRequestKey, PullRequestState, Timestamp};
 
 /// Who wrote something: a person or an agent acting over ACP.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
@@ -425,6 +425,62 @@ impl Dependency {
     }
 }
 
+/// One pull request of a GitHub stack.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct StackEntry {
+    /// The entry's place in the stack: 1 is the closest to the base branch.
+    pub position: u32,
+    /// The pull request at this position.
+    pub key: PullRequestKey,
+    /// The pull request's title, kept here because a member is often not in any list.
+    pub title: String,
+    /// The pull request's state; a merged member stays in its stack.
+    pub state: PullRequestState,
+}
+
+impl StackEntry {
+    /// Entry `position` of a stack: pull request `key`, titled `title`, in `state`.
+    pub fn new(
+        position: u32,
+        key: PullRequestKey,
+        title: impl Into<String>,
+        state: PullRequestState,
+    ) -> Self {
+        Self {
+            position,
+            key,
+            title: title.into(),
+            state,
+        }
+    }
+}
+
+/// A GitHub stack: pull requests of one repository that land on `base_ref` one after
+/// another, each based on the one below it.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Stack {
+    /// The stack's number, unique within its repository.
+    pub number: u64,
+    /// The branch the whole stack lands on.
+    pub base_ref: String,
+    /// The stack's pull requests in merge order, position 1 first; merged ones stay.
+    pub entries: Vec<StackEntry>,
+}
+
+impl Stack {
+    /// Stack `number` onto `base_ref`; `entries` are put in merge order.
+    pub fn new(number: u64, base_ref: impl Into<String>, mut entries: Vec<StackEntry>) -> Self {
+        entries.sort_by_key(|entry| entry.position);
+        Self {
+            number,
+            base_ref: base_ref.into(),
+            entries,
+        }
+    }
+}
+
 /// A summary of the most recent agent review.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[non_exhaustive]
@@ -669,6 +725,9 @@ pub struct PullRequestDetail {
     pub reviewers: Vec<Reviewer>,
     pub checks: Vec<CheckRun>,
     pub depends_on: Vec<Dependency>,
+    /// The GitHub stack the pull request is part of, with every member.
+    #[serde(default)]
+    pub stack: Option<Stack>,
     pub last_agent_review: Option<AgentReviewSummary>,
     /// Paths the viewer marked as viewed.
     pub viewed: Vec<String>,
@@ -695,6 +754,7 @@ impl PullRequestDetail {
             reviewers: Vec::new(),
             checks: Vec::new(),
             depends_on: Vec::new(),
+            stack: None,
             last_agent_review: None,
             viewed: Vec::new(),
             merge: None,
@@ -751,6 +811,22 @@ impl PullRequestDetail {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stack_keeps_its_entries_in_merge_order() {
+        let repo = pr_model::RepoSlug::new("o", "r");
+        let entry = |position, number| {
+            StackEntry::new(
+                position,
+                PullRequestKey::new(repo.clone(), number),
+                "t",
+                PullRequestState::Open,
+            )
+        };
+        let stack = Stack::new(7, "main", vec![entry(2, 11), entry(1, 10)]);
+        let numbers: Vec<u64> = stack.entries.iter().map(|e| e.key.number()).collect();
+        assert_eq!(numbers, [10, 11]);
+    }
 
     #[test]
     fn initials_take_one_letter_per_word_or_two_of_one_word() {

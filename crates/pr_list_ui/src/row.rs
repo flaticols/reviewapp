@@ -5,10 +5,11 @@ use gpui_kit::component::{
     ActiveTheme as _, Icon, Sizable as _, h_flex, list::ListItem, skeleton::Skeleton, v_flex,
 };
 use gpui_kit::{
-    App, ClickEvent, FontWeight, Hsla, IntoElement, ParentElement as _, RenderOnce, SharedString,
-    Styled as _, Window, div, prelude::FluentBuilder as _, rems,
+    App, ClickEvent, FontWeight, Hsla, InteractiveElement as _, IntoElement, ParentElement as _,
+    RenderOnce, SharedString, StatefulInteractiveElement as _, Styled as _, TestSupportExt as _,
+    Window, div, prelude::FluentBuilder as _, rems,
 };
-use pr_model::{PullRequest, ReviewDecision, Timestamp};
+use pr_model::{MergeQueueState, PullRequest, ReviewDecision, Timestamp};
 use theme_ui::{ActiveAppTheme as _, TypographyExt as _};
 use triage::{PullRequestRisk, Risk};
 use widgets_ui::{CheckIcon, PullRequestStateIcon, StatusTag, Tone};
@@ -29,10 +30,32 @@ pub fn review_decision_icon(decision: ReviewDecision, cx: &App) -> (IconName, Hs
     }
 }
 
+/// A small icon and label after a row's provenance, such as its place in a stack. It
+/// keeps its width while the provenance truncates.
+fn meta_marker(
+    id: String,
+    icon: IconName,
+    label: impl Into<SharedString>,
+    color: Hsla,
+) -> impl IntoElement {
+    let label = label.into();
+    h_flex()
+        .id(SharedString::from(id))
+        .aria_label(label.clone())
+        .test_support()
+        .flex_shrink_0()
+        .gap_1()
+        .text_meta()
+        .text_color(color)
+        .child(Icon::new(icon).xsmall())
+        .child(label)
+}
+
 type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 
 /// One pull request in the list: state, title, provenance, review decision, CI,
-/// comment count and age, each in a fixed lane so rows scan as columns.
+/// comment count and age, each in a fixed lane so rows scan as columns. A pull request
+/// in a stack or a merge queue says so after its provenance.
 #[derive(IntoElement)]
 pub struct PullRequestRow {
     pull_request: PullRequest,
@@ -159,7 +182,27 @@ impl RenderOnce for PullRequestRow {
                                             .text_color(muted)
                                             .truncate()
                                             .child(meta),
-                                    ),
+                                    )
+                                    .children(pr.stack.map(|stack| {
+                                        meta_marker(
+                                            format!("stack:{}", pr.key.id()),
+                                            IconName::Layers,
+                                            stack.label(),
+                                            muted,
+                                        )
+                                    }))
+                                    .children(pr.merge_queue.map(|state| {
+                                        meta_marker(
+                                            format!("merge-queue:{}", pr.key.id()),
+                                            IconName::ListEnd,
+                                            state.label(),
+                                            if state == MergeQueueState::Unmergeable {
+                                                cx.theme().danger
+                                            } else {
+                                                muted
+                                            },
+                                        )
+                                    })),
                             ),
                     )
                     .child(

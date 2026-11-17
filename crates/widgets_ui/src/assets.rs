@@ -83,6 +83,8 @@ gpui_kit::assets::icon_assets!(
         OctagonAlert,
         Pin,
         PinOff,
+        Layers,
+        ListEnd,
     ]
 );
 
@@ -115,7 +117,12 @@ mod tests {
 
     #[test]
     fn menu_icons_are_bundled() {
-        for icon in [IconName::FolderPlus, IconName::GitBranch] {
+        for icon in [
+            IconName::FolderPlus,
+            IconName::GitBranch,
+            IconName::Layers,
+            IconName::ListEnd,
+        ] {
             let path = icon.path();
             assert!(
                 matches!(AppAssets.load(&path), Ok(Some(_))),

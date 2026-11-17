@@ -16,10 +16,11 @@ use gpui_kit::component::{
     v_flex,
 };
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, SharedString,
-    Styled as _, Window, div, prelude::FluentBuilder as _, rems,
+    App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
+    TestSupportExt as _, Window, div, prelude::FluentBuilder as _, rems,
 };
-use pr_model::{PullRequestKey, PullRequestState};
+use pr_model::{MergeQueueState, PullRequestKey, PullRequestState};
 use review_model::{MergeInfo, MergeMethod, MergeState, PullRequestDetail};
 use theme_ui::TypographyExt as _;
 
@@ -39,8 +40,22 @@ pub(crate) struct MergeForm {
     popover: Option<Entity<PopoverState>>,
 }
 
-/// What the panel says about whether the pull request can merge, and how loudly.
-fn readiness(info: &MergeInfo, base: &str) -> (IconName, &'static str, String) {
+/// What the panel says about whether the pull request can merge, and how loudly. A
+/// pull request already in the merge queue reports the queue instead: GitHub merges it
+/// from there.
+fn readiness(
+    info: &MergeInfo,
+    base: &str,
+    queue: Option<MergeQueueState>,
+) -> (IconName, &'static str, String) {
+    if let Some(queue) = queue {
+        let tone = if queue == MergeQueueState::Unmergeable {
+            "danger"
+        } else {
+            "muted"
+        };
+        return (IconName::ListEnd, tone, queue.description().into());
+    }
     match info.state {
         MergeState::Clean => (IconName::CircleCheck, "success", "Ready to merge.".into()),
         MergeState::HasHooks => (
@@ -372,7 +387,9 @@ impl Render for MergeForm {
                 .into_any_element();
         };
         let number = detail.summary.key.number();
-        let (icon, tone, status) = readiness(&info, &detail.summary.base_ref);
+        let queue = detail.summary.merge_queue;
+        let (icon, tone, status) = readiness(&info, &detail.summary.base_ref, queue);
+        let status = SharedString::from(status);
         let status_color = match tone {
             "success" => cx.theme().success,
             "warning" => cx.theme().warning,
@@ -394,6 +411,9 @@ impl Render for MergeForm {
             .child(div().text_heading().child(format!("Merge #{number}")))
             .child(
                 h_flex()
+                    .id("merge-status")
+                    .aria_label(status.clone())
+                    .test_support()
                     .items_start()
                     .gap_2()
                     .text_ui()
@@ -539,7 +559,11 @@ impl Render for MergeForm {
                             .success()
                             .label(method.map_or("Merge", MergeMethod::label))
                             .loading(busy)
-                            .disabled(busy || !info.state.can_merge() || method.is_none())
+                            .disabled(
+                                busy || queue.is_some()
+                                    || !info.state.can_merge()
+                                    || method.is_none(),
+                            )
                             .on_click(cx.listener(|this, _, window, cx| this.merge(window, cx))),
                     ),
             )
@@ -565,7 +589,8 @@ impl ReviewThreadView {
 }
 
 /// The title bar's Merge button: green when the pull request can merge now, quiet
-/// otherwise, and "Auto-merge" while that waits. Hidden unless the pull request is open.
+/// otherwise, "Auto-merge" while that waits and "Queued" while it is in the merge queue.
+/// Hidden unless the pull request is open.
 pub(crate) fn merge_button(
     detail: &PullRequestDetail,
     form: Entity<MergeForm>,
@@ -575,15 +600,20 @@ pub(crate) fn merge_button(
     if detail.summary.state != PullRequestState::Open {
         return None;
     }
+    let queued = detail.summary.merge_queue.is_some();
     let ready = info.state.can_merge();
-    let (border, text) = if info.auto_merge.is_some() {
+    let (border, text) = if queued {
+        (cx.theme().border, cx.theme().muted_foreground)
+    } else if info.auto_merge.is_some() {
         (cx.theme().info, cx.theme().info)
     } else if ready {
         (cx.theme().success, cx.theme().success)
     } else {
         (cx.theme().border, cx.theme().muted_foreground)
     };
-    let label = if info.auto_merge.is_some() {
+    let label = if queued {
+        "Queued"
+    } else if info.auto_merge.is_some() {
         "Auto-merge"
     } else {
         "Merge"

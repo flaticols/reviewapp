@@ -207,6 +207,89 @@ impl Inbox {
     }
 }
 
+/// Where a pull request sits in a GitHub stack: a chain of pull requests in one
+/// repository, each based on the one below it.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct StackPosition {
+    number: u64,
+    position: u32,
+    size: u32,
+}
+
+impl StackPosition {
+    /// Entry `position` of the `size` pull requests in stack `number`.
+    pub fn new(number: u64, position: u32, size: u32) -> Self {
+        Self {
+            number,
+            position,
+            size,
+        }
+    }
+
+    /// The stack's number, unique within its repository.
+    pub fn number(self) -> u64 {
+        self.number
+    }
+
+    /// The entry's place in the stack: 1 is the closest to the base branch.
+    pub fn position(self) -> u32 {
+        self.position
+    }
+
+    /// How many pull requests the stack holds, merged ones included.
+    pub fn size(self) -> u32 {
+        self.size
+    }
+
+    /// The marker lists show, such as `Stack 2/3`.
+    pub fn label(self) -> String {
+        format!("Stack {}/{}", self.position, self.size)
+    }
+}
+
+/// The state GitHub reports for a pull request's entry in a merge queue.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MergeQueueState {
+    Queued,
+    /// Waiting for checks to pass.
+    AwaitingChecks,
+    Mergeable,
+    Unmergeable,
+    Locked,
+}
+
+impl MergeQueueState {
+    /// The state for a GraphQL `MergeQueueEntryState`; an unknown name reads as queued.
+    pub fn from_graphql(name: &str) -> Self {
+        match name {
+            "AWAITING_CHECKS" => Self::AwaitingChecks,
+            "MERGEABLE" => Self::Mergeable,
+            "UNMERGEABLE" => Self::Unmergeable,
+            "LOCKED" => Self::Locked,
+            _ => Self::Queued,
+        }
+    }
+
+    /// The marker lists show.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Unmergeable => "Merge queue failed",
+            _ => "In merge queue",
+        }
+    }
+
+    /// A sentence for the merge popover.
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Queued => "In the merge queue.",
+            Self::AwaitingChecks => "In the merge queue, waiting for its checks.",
+            Self::Mergeable => "In the merge queue and mergeable.",
+            Self::Unmergeable => "In the merge queue, but it can’t merge.",
+            Self::Locked => "In the merge queue; its entry is locked.",
+        }
+    }
+}
+
 /// A pull request as it appears in lists.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 #[non_exhaustive]
@@ -225,6 +308,12 @@ pub struct PullRequest {
     /// The title of the GitHub milestone the pull request is assigned to.
     #[serde(default)]
     pub milestone: Option<String>,
+    /// The pull request's place in a GitHub stack, when it is part of one.
+    #[serde(default)]
+    pub stack: Option<StackPosition>,
+    /// What the merge queue is doing with the pull request, when it waits in one.
+    #[serde(default)]
+    pub merge_queue: Option<MergeQueueState>,
     pub inboxes: Vec<Inbox>,
     pub agent_reviewed: bool,
     /// The start of the description, for triage in the list.
@@ -242,8 +331,8 @@ pub struct PullRequest {
 }
 
 impl PullRequest {
-    /// Builds an open pull request with no review, checks, comments, labels or milestone; set the
-    /// remaining public fields directly.
+    /// Builds an open pull request with no review, checks, comments, labels or milestone, outside
+    /// any stack or merge queue; set the remaining public fields directly.
     pub fn new(
         key: PullRequestKey,
         title: impl Into<String>,
@@ -265,6 +354,8 @@ impl PullRequest {
             updated_at,
             labels: Vec::new(),
             milestone: None,
+            stack: None,
+            merge_queue: None,
             inboxes: Vec::new(),
             agent_reviewed: false,
             body_excerpt: String::new(),
@@ -423,6 +514,23 @@ mod tests {
         assert_eq!(now.minus(40 * 60).long_age(now), "40m ago");
         assert_eq!(now.minus(2 * 86_400).long_age(now), "2 days ago");
         assert_eq!(now.minus(12 * 60).minutes_age(now), "12 min ago");
+    }
+
+    #[test]
+    fn a_stack_position_reads_as_place_of_size() {
+        assert_eq!(StackPosition::new(12, 2, 3).label(), "Stack 2/3");
+    }
+
+    #[test]
+    fn merge_queue_states_map_from_graphql() {
+        assert_eq!(
+            MergeQueueState::from_graphql("AWAITING_CHECKS"),
+            MergeQueueState::AwaitingChecks
+        );
+        assert_eq!(
+            MergeQueueState::from_graphql("SOMETHING_NEW"),
+            MergeQueueState::Queued
+        );
     }
 
     #[test]

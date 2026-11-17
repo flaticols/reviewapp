@@ -2,16 +2,17 @@
 //! signed-in user's token. Every call runs `gh api` and blocks.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use diff_model::FileChange;
 use pr_model::{
-    CheckStatus, Inbox, PullRequest, PullRequestKey, PullRequestState, RepoSlug, ReviewDecision,
-    Timestamp,
+    CheckStatus, Inbox, MergeQueueState, PullRequest, PullRequestKey, PullRequestState, RepoSlug,
+    ReviewDecision, StackPosition, Timestamp,
 };
 use review_model::{
     Actor, AutoMerge, CheckRun, CheckStep, Comment, Commit, Dependency, LogLine, LogLineKind,
     MergeInfo, MergeMethod, MergeState, PullRequestDetail, ReviewThread, ReviewVerdict, Reviewer,
-    ReviewerState, TimelineItem,
+    ReviewerState, Stack, StackEntry, TimelineItem,
 };
 use serde_json::{Value, json};
 
@@ -26,12 +27,18 @@ const PER_INBOX: u32 = 50;
 /// Reads pull requests for the `gh` account on `host`.
 pub struct GhSource {
     host: String,
+    /// Set once the host said it lacks a newer pull request field, as a GitHub Enterprise
+    /// Server without stacks does.
+    without_newer_fields: AtomicBool,
 }
 
 impl GhSource {
     /// A source for `host`, normally `github.com`.
     pub fn new(host: impl Into<String>) -> Self {
-        Self { host: host.into() }
+        Self {
+            host: host.into(),
+            without_newer_fields: AtomicBool::new(false),
+        }
     }
 
     fn api(&self, args: &[&str], input: Option<&Value>) -> Result<Value, ApiError> {
@@ -94,6 +101,27 @@ impl GhSource {
         Ok(response["data"].clone())
     }
 
+    /// Runs a pull request query whose `template` has a [`NEWER_FIELDS`] placeholder,
+    /// with `newer_fields` in its place. One unknown field fails a whole query, so on a
+    /// host that lacks one of them this asks again without them and stops asking for them.
+    fn pull_request_query(
+        &self,
+        template: &str,
+        newer_fields: &str,
+        variables: Value,
+    ) -> Result<Value, ApiError> {
+        if !self.without_newer_fields.load(Ordering::Relaxed) {
+            let query = template.replace(NEWER_FIELDS, newer_fields);
+            match self.graphql(&query, variables.clone()) {
+                Err(error) if lacks_pull_request_field(&error.to_string()) => {
+                    self.without_newer_fields.store(true, Ordering::Relaxed);
+                }
+                result => return result,
+            }
+        }
+        self.graphql(&template.replace(NEWER_FIELDS, ""), variables)
+    }
+
     fn rest_paginated(&self, path: &str) -> Result<Vec<Value>, ApiError> {
         let response = self.api(&["--paginate", "--slurp", path], None)?;
         Ok(response
@@ -119,6 +147,23 @@ impl GhSource {
     }
 }
 
+/// Where a pull request query takes the fields an older GitHub Enterprise Server may
+/// not have: the stack and the merge queue entry.
+const NEWER_FIELDS: &str = "__NEWER_FIELDS__";
+
+/// A list row's merge queue state and place in its stack. The stack's entries stay out
+/// of the list query: nested under every row of every inbox they would multiply its cost.
+const SUMMARY_EXTRAS: &str =
+    "mergeQueueEntry { state } stack { number size } stackEntry { position }";
+
+/// The merge queue state and the stack with every member, for the review screen.
+const DETAIL_EXTRAS: &str = "mergeQueueEntry { state } stack { number size baseRefName entries(first: 50) { nodes { position pullRequest { number title state isDraft } } } } stackEntry { position }";
+
+/// Whether GitHub's error `message` says the host's schema lacks a pull request field.
+fn lacks_pull_request_field(message: &str) -> bool {
+    message.contains("doesn't exist on type 'PullRequest'")
+}
+
 const SEARCH_QUERY: &str = r#"
 query($query: String!, $first: Int!) {
   search(query: $query, type: ISSUE, first: $first) {
@@ -132,6 +177,7 @@ query($query: String!, $first: Int!) {
         reviewThreads { totalCount }
         labels(first: 10) { nodes { name } }
         milestone { title }
+        __NEWER_FIELDS__
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
         bodyText additions deletions changedFiles
         files(first: 40) { nodes { path } }
@@ -156,6 +202,7 @@ query($owner: String!, $name: String!, $number: Int!) {
       comments { totalCount }
       labels(first: 10) { nodes { name } }
       milestone { title }
+      __NEWER_FIELDS__
       commits(last: 100) { nodes { commit { oid messageHeadline statusCheckRollup { state } } } }
       reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login name } ... on Team { name } ... on Bot { login } } } }
       latestReviews(first: 30) { nodes { author { login ... on User { name } } state } }
@@ -255,6 +302,40 @@ fn merge_info(repository: &Value, node: &Value) -> Option<MergeInfo> {
 /// How much of a description the list keeps, enough for triage to judge by.
 const BODY_EXCERPT_CHARS: usize = 1500;
 
+fn state_from(node: &Value) -> PullRequestState {
+    match (node["state"].as_str(), node["isDraft"].as_bool()) {
+        (Some("MERGED"), _) => PullRequestState::Merged,
+        (Some("CLOSED"), _) => PullRequestState::Closed,
+        (_, Some(true)) => PullRequestState::Draft,
+        _ => PullRequestState::Open,
+    }
+}
+
+/// The stack `node` is part of, with its members in `repo`. An entry whose pull request
+/// the viewer can't read comes back null and is left out.
+fn stack_from(repo: &RepoSlug, node: &Value) -> Option<Stack> {
+    let stack = &node["stack"];
+    let number = stack["number"].as_u64()?;
+    let entries = stack["entries"]["nodes"]
+        .as_array()?
+        .iter()
+        .filter_map(|entry| {
+            let pull_request = &entry["pullRequest"];
+            Some(StackEntry::new(
+                entry["position"].as_u64()? as u32,
+                PullRequestKey::new(repo.clone(), pull_request["number"].as_u64()?),
+                pull_request["title"].as_str().unwrap_or_default(),
+                state_from(pull_request),
+            ))
+        })
+        .collect();
+    Some(Stack::new(
+        number,
+        stack["baseRefName"].as_str().unwrap_or_default(),
+        entries,
+    ))
+}
+
 fn summary_from(node: &Value) -> Option<PullRequest> {
     let repo = RepoSlug::parse(node["repository"]["nameWithOwner"].as_str()?)?;
     let number = node["number"].as_u64()?;
@@ -266,12 +347,7 @@ fn summary_from(node: &Value) -> Option<PullRequest> {
         node["baseRefName"].as_str().unwrap_or_default(),
         timestamp(&node["updatedAt"]),
     );
-    pull_request.state = match (node["state"].as_str(), node["isDraft"].as_bool()) {
-        (Some("MERGED"), _) => PullRequestState::Merged,
-        (Some("CLOSED"), _) => PullRequestState::Closed,
-        (_, Some(true)) => PullRequestState::Draft,
-        _ => PullRequestState::Open,
-    };
+    pull_request.state = state_from(node);
     pull_request.review = match node["reviewDecision"].as_str() {
         Some("APPROVED") => ReviewDecision::Approved,
         Some("CHANGES_REQUESTED") => ReviewDecision::ChangesRequested,
@@ -297,6 +373,16 @@ fn summary_from(node: &Value) -> Option<PullRequest> {
         })
         .unwrap_or_default();
     pull_request.milestone = node["milestone"]["title"].as_str().map(str::to_string);
+    pull_request.stack = node["stack"]["number"].as_u64().and_then(|stack| {
+        Some(StackPosition::new(
+            stack,
+            node["stackEntry"]["position"].as_u64()? as u32,
+            node["stack"]["size"].as_u64()? as u32,
+        ))
+    });
+    pull_request.merge_queue = node["mergeQueueEntry"]["state"]
+        .as_str()
+        .map(MergeQueueState::from_graphql);
     pull_request.body_excerpt = node["bodyText"]
         .as_str()
         .unwrap_or_default()
@@ -553,7 +639,11 @@ impl PullRequestSource for GhSource {
                         } else {
                             PER_INBOX
                         };
-                        self.graphql(SEARCH_QUERY, json!({ "query": query, "first": first }))
+                        self.pull_request_query(
+                            SEARCH_QUERY,
+                            SUMMARY_EXTRAS,
+                            json!({ "query": query, "first": first }),
+                        )
                     })
                 })
                 .collect();
@@ -599,8 +689,9 @@ impl PullRequestSource for GhSource {
     fn detail(&self, key: &PullRequestKey) -> Result<PullRequestDetail, ApiError> {
         let (data, files) = std::thread::scope(|scope| {
             let files = scope.spawn(|| self.files(key));
-            let data = self.graphql(
+            let data = self.pull_request_query(
                 DETAIL_QUERY,
+                DETAIL_EXTRAS,
                 json!({
                     "owner": key.repo().owner(),
                     "name": key.repo().name(),
@@ -630,6 +721,7 @@ impl PullRequestSource for GhSource {
         );
         detail.viewer = (!viewer.is_empty()).then(|| viewer.clone());
         detail.merge = merge_info(&data["repository"], node);
+        detail.stack = stack_from(key.repo(), node);
         detail.commits = node["commits"]["nodes"]
             .as_array()
             .cloned()
@@ -1085,6 +1177,84 @@ mod tests {
     }
 
     #[test]
+    fn a_summary_reads_its_stack_position_and_queue_state() {
+        let node = json!({
+            "number": 579, "title": "t", "repository": { "nameWithOwner": "o/r" },
+            "stack": { "number": 580, "size": 2 },
+            "stackEntry": { "position": 2 },
+            "mergeQueueEntry": { "state": "AWAITING_CHECKS" }
+        });
+        let pr = summary_from(&node).unwrap();
+        assert_eq!(pr.stack, Some(StackPosition::new(580, 2, 2)));
+        assert_eq!(pr.merge_queue, Some(MergeQueueState::AwaitingChecks));
+    }
+
+    #[test]
+    fn a_summary_outside_a_stack_and_queue_has_neither() {
+        let node = json!({
+            "number": 7, "title": "t", "repository": { "nameWithOwner": "o/r" },
+            "stack": null, "stackEntry": null, "mergeQueueEntry": null
+        });
+        let pr = summary_from(&node).unwrap();
+        assert_eq!(pr.stack, None);
+        assert_eq!(pr.merge_queue, None);
+        let without_the_fields =
+            json!({ "number": 7, "title": "t", "repository": { "nameWithOwner": "o/r" } });
+        assert_eq!(summary_from(&without_the_fields).unwrap().stack, None);
+    }
+
+    #[test]
+    fn a_stack_lists_its_members_in_merge_order_and_skips_unreadable_ones() {
+        let repo = RepoSlug::new("o", "r");
+        let node = json!({ "stack": {
+            "number": 577, "size": 3, "baseRefName": "main",
+            "entries": { "nodes": [
+                { "position": 3, "pullRequest": { "number": 576, "title": "c", "state": "OPEN", "isDraft": true } },
+                { "position": 1, "pullRequest": { "number": 574, "title": "a", "state": "MERGED", "isDraft": false } },
+                { "position": 2, "pullRequest": null }
+            ] }
+        } });
+        let stack = stack_from(&repo, &node).unwrap();
+        assert_eq!(stack.number, 577);
+        assert_eq!(stack.base_ref, "main");
+        let members: Vec<_> = stack
+            .entries
+            .iter()
+            .map(|entry| (entry.position, entry.key.number(), entry.state))
+            .collect();
+        assert_eq!(
+            members,
+            [
+                (1, 574, PullRequestState::Merged),
+                (3, 576, PullRequestState::Draft)
+            ]
+        );
+        assert_eq!(stack_from(&repo, &json!({ "stack": null })), None);
+    }
+
+    #[test]
+    fn only_a_missing_pull_request_field_drops_the_newer_fields() {
+        assert!(lacks_pull_request_field(
+            "GitHub: Field 'stack' doesn't exist on type 'PullRequest'"
+        ));
+        assert!(lacks_pull_request_field(
+            "GitHub: Field 'mergeQueueEntry' doesn't exist on type 'PullRequest'"
+        ));
+        assert!(!lacks_pull_request_field(
+            "GitHub: Field 'viewerDefaultMergeMethod' doesn't exist on type 'Repository'"
+        ));
+        assert!(!lacks_pull_request_field("GitHub: API rate limit exceeded"));
+        for (template, fields) in [
+            (SEARCH_QUERY, SUMMARY_EXTRAS),
+            (DETAIL_QUERY, DETAIL_EXTRAS),
+        ] {
+            assert!(template.replace(NEWER_FIELDS, fields).contains(fields));
+            let without = template.replace(NEWER_FIELDS, "");
+            assert!(!without.contains("stack") && !without.contains("mergeQueueEntry"));
+        }
+    }
+
+    #[test]
     fn a_summary_without_a_milestone_has_none() {
         let node = json!({
             "number": 7, "title": "T", "state": "OPEN",
@@ -1156,5 +1326,78 @@ mod live {
             detail.reviewers.len()
         );
         assert!(!detail.files.is_empty());
+    }
+
+    /// Asks github.com for a pull request field it doesn't have, as an older GitHub
+    /// Enterprise Server would be asked for `stack`: the rows still load, and the source
+    /// stops asking.
+    #[test]
+    #[ignore = "talks to GitHub with the gh CLI's credentials"]
+    fn live_unknown_field_falls_back() {
+        let source = GhSource::new("github.com");
+        let variables = json!({ "query": "repo:github/gh-stack is:pr is:merged", "first": 3 });
+        let data = source
+            .pull_request_query(SEARCH_QUERY, "fieldNoHostHas", variables.clone())
+            .expect("the search runs without the unknown field");
+        let rows = data["search"]["nodes"].as_array().expect("nodes");
+        assert!(rows.iter().filter_map(summary_from).count() > 0);
+        assert!(source.without_newer_fields.load(Ordering::Relaxed));
+        let data = source
+            .pull_request_query(SEARCH_QUERY, SUMMARY_EXTRAS, variables)
+            .expect("later queries run");
+        assert!(
+            data["search"]["nodes"][0].get("stack").is_none(),
+            "later queries leave the newer fields out"
+        );
+    }
+
+    /// Reads stack 580 of `github/gh-stack`, two merged pull requests, through the list
+    /// query and the detail query.
+    #[test]
+    #[ignore = "talks to GitHub with the gh CLI's credentials"]
+    fn live_stack() {
+        let source = GhSource::new("github.com");
+        let repo = RepoSlug::new("github", "gh-stack");
+        let data = source
+            .pull_request_query(
+                SEARCH_QUERY,
+                SUMMARY_EXTRAS,
+                json!({
+                    "query": "repo:github/gh-stack is:pr is:merged in:title Reduce redundant Git and worktree lookups",
+                    "first": 5,
+                }),
+            )
+            .expect("the search runs");
+        let summaries: Vec<PullRequest> = data["search"]["nodes"]
+            .as_array()
+            .expect("the search has nodes")
+            .iter()
+            .filter_map(summary_from)
+            .collect();
+        let summary = summaries
+            .iter()
+            .find(|pr| pr.key.number() == 579)
+            .expect("#579 is found");
+        assert_eq!(summary.stack, Some(StackPosition::new(580, 2, 2)));
+        assert!(!source.without_newer_fields.load(Ordering::Relaxed));
+
+        let detail = source
+            .detail(&PullRequestKey::new(repo, 579))
+            .expect("detail loads");
+        let stack = detail.stack.expect("#579 is in a stack");
+        assert_eq!(stack.number, 580);
+        assert_eq!(stack.base_ref, "main");
+        let members: Vec<_> = stack
+            .entries
+            .iter()
+            .map(|entry| (entry.position, entry.key.number(), entry.state))
+            .collect();
+        assert_eq!(
+            members,
+            [
+                (1, 578, PullRequestState::Merged),
+                (2, 579, PullRequestState::Merged)
+            ]
+        );
     }
 }

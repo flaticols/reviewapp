@@ -27,6 +27,8 @@ enum Scene {
     ApprovePopover,
     /// The merge panel, open from the title bar.
     MergePopover,
+    /// The merge panel of a pull request that waits in the merge queue.
+    MergeQueue,
     /// A pull request row's context menu.
     RowMenu,
     /// The list's Filter menu, open from the title bar.
@@ -88,7 +90,7 @@ enum Scene {
 }
 
 impl Scene {
-    const ALL: [Scene; 39] = [
+    const ALL: [Scene; 40] = [
         Self::List,
         Self::OneCommit,
         Self::RowMenu,
@@ -101,6 +103,7 @@ impl Scene {
         Self::Thread,
         Self::ApprovePopover,
         Self::MergePopover,
+        Self::MergeQueue,
         Self::TitlePopover,
         Self::ThreadCodeFont,
         Self::ThreadEspresso,
@@ -136,6 +139,7 @@ impl Scene {
             Self::Thread => "02-thread",
             Self::ApprovePopover => "03b-approve-popover",
             Self::MergePopover => "03e-merge-popover",
+            Self::MergeQueue => "03g-merge-queue",
             Self::RowMenu => "01c-row-menu",
             Self::FilterMenu => "01d-filter-menu",
             Self::ByMilestone => "01f-by-milestone",
@@ -331,6 +335,8 @@ fn render(
                 .map(|pr| pr.key.clone())
         })
         .unwrap_or_else(featured)
+    } else if scene == Scene::MergeQueue {
+        PullRequestKey::new(RepoSlug::new("flaticols", "gathering-app"), 118)
     } else {
         featured()
     };
@@ -343,6 +349,7 @@ fn render(
             Scene::Thread
                 | Scene::ApprovePopover
                 | Scene::MergePopover
+                | Scene::MergeQueue
                 | Scene::FileMenu
                 | Scene::OneCommit
                 | Scene::RequestReview
@@ -505,13 +512,16 @@ fn render(
                 .unwrap_or_else(|| home.join("Developer").join(target.repo().name()));
             pr_actions_ui::open_new_worktree(target.clone(), head_ref, clone, window, cx);
         }
-        Scene::ApprovePopover | Scene::TitlePopover | Scene::MergePopover => {
+        Scene::ApprovePopover
+        | Scene::TitlePopover
+        | Scene::MergePopover
+        | Scene::MergeQueue => {
             use gpui_kit::test::TestWindowExt as _;
             window.render_frame(cx);
             window.click(
                 match scene {
                     Scene::ApprovePopover => "approve",
-                    Scene::MergePopover => "merge",
+                    Scene::MergePopover | Scene::MergeQueue => "merge",
                     _ => "pull-request-title",
                 },
                 cx,

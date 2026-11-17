@@ -13,13 +13,13 @@ use std::path::Path;
 use diff_model::FileChange;
 use git_diff::parse_patch;
 use pr_model::{
-    CheckStatus, Inbox, PullRequest, PullRequestKey, PullRequestState, RepoSlug, ReviewDecision,
-    SavedFilter, SavedFilterRule, Timestamp,
+    CheckStatus, Inbox, MergeQueueState, PullRequest, PullRequestKey, PullRequestState, RepoSlug,
+    ReviewDecision, SavedFilter, SavedFilterRule, StackPosition, Timestamp,
 };
 use review_model::{
     Actor, AgentFinding, AgentReviewSummary, CheckRun, CheckStep, Comment, Commit, Dependency,
     FindingState, LogLine, LogLineKind, PullRequestDetail, ReviewThread, ReviewVerdict, Reviewer,
-    ReviewerState, TimelineItem,
+    ReviewerState, Stack, StackEntry, TimelineItem,
 };
 use settings_model::{
     Account, AccountSource, CloneStatus, Preferences, RepositoryMapping, SettingsFile,
@@ -48,9 +48,14 @@ pub struct SampleData {
 /// Builds the sample workspace with ages relative to `now` and paths under `home`.
 pub fn sample(now: Timestamp, home: &Path) -> SampleData {
     let pull_requests = pull_requests(now);
-    let details = pull_requests
+    let known: Vec<PullRequest> = pull_requests
         .iter()
-        .map(|pull_request| detail(pull_request, now))
+        .cloned()
+        .chain([merged_stack_base(now)])
+        .collect();
+    let details = known
+        .iter()
+        .map(|pull_request| detail(pull_request, &known, now))
         .collect();
     let viewer =
         Account::new("flaticols", "github.com", AccountSource::GhCli).with_name("Denis Panfilov");
@@ -342,6 +347,19 @@ fn pull_requests(now: Timestamp) -> Vec<PullRequest> {
             475 | 470 | 121 => Some("v1.0".to_string()),
             _ => None,
         };
+        if pull_request.key.repo() == &switchfold()
+            && let Some(ix) = STACK.iter().position(|n| *n == pull_request.key.number())
+        {
+            pull_request.stack = Some(StackPosition::new(
+                STACK_NUMBER,
+                ix as u32 + 1,
+                STACK.len() as u32,
+            ));
+            pull_request.base_ref = STACK_BASES[ix].to_string();
+        }
+        if pull_request.key == PullRequestKey::new(gathering_app(), 118) {
+            pull_request.merge_queue = Some(MergeQueueState::AwaitingChecks);
+        }
     }
     pull_requests.extend(backlog(now));
     pull_requests
@@ -442,11 +460,66 @@ fn slug(title: &str) -> String {
         .join("-")
 }
 
-fn detail(pull_request: &PullRequest, now: Timestamp) -> PullRequestDetail {
-    if pull_request.key == PullRequestKey::new(switchfold(), 482) {
-        return thread_view_detail(pull_request.clone(), now);
+/// The sample stack's number in `flaticols/switchfold`.
+const STACK_NUMBER: u64 = 12;
+/// The sample stack's pull requests in merge order. #468 has merged, so it is in no
+/// inbox, and #470 is next onto `main`.
+const STACK: [u64; 4] = [468, 470, 477, 482];
+/// The base branch of each entry of [`STACK`]: the head of the entry below it, or
+/// `main` once that has merged.
+const STACK_BASES: [&str; 4] = ["main", "main", "fix/hunk-eof", "feat/repo-mapping"];
+
+/// The sample stack's first pull request, which the list doesn't hold.
+fn merged_stack_base(now: Timestamp) -> PullRequest {
+    let mut pull_request = PullRequest::new(
+        PullRequestKey::new(switchfold(), STACK[0]),
+        "Split hunk rendering out of the diff view",
+        "denis",
+        "refactor/hunk-render",
+        STACK_BASES[0],
+        now.minus(5 * DAY),
+    );
+    pull_request.state = PullRequestState::Merged;
+    pull_request.review = ReviewDecision::Approved;
+    pull_request.ci = Some(CheckStatus::Passed);
+    pull_request.stack = Some(StackPosition::new(STACK_NUMBER, 1, STACK.len() as u32));
+    pull_request
+}
+
+/// The review data for `pull_request`; a stack's members are looked up in `known`.
+fn detail(pull_request: &PullRequest, known: &[PullRequest], now: Timestamp) -> PullRequestDetail {
+    let mut detail = if pull_request.key == PullRequestKey::new(switchfold(), 482) {
+        thread_view_detail(pull_request.clone(), now)
+    } else {
+        generic_detail(pull_request)
+    };
+    if let Some(position) = pull_request.stack {
+        let entries = known
+            .iter()
+            .filter(|member| {
+                member.key.repo() == pull_request.key.repo()
+                    && member.stack.map(StackPosition::number) == Some(position.number())
+            })
+            .filter_map(|member| {
+                Some(StackEntry::new(
+                    member.stack?.position(),
+                    member.key.clone(),
+                    member.title.clone(),
+                    member.state,
+                ))
+            })
+            .collect();
+        detail.stack = Some(Stack::new(position.number(), "main", entries));
     }
-    generic_detail(pull_request)
+    if pull_request.merge_queue.is_some() {
+        detail.merge = Some(review_model::MergeInfo::new(
+            format!("PR_sample_{}", pull_request.key.number()),
+            "4c2e9a1b00",
+            review_model::MergeState::Clean,
+            vec![review_model::MergeMethod::Squash],
+        ));
+    }
+    detail
 }
 
 fn thread_view_detail(summary: PullRequest, now: Timestamp) -> PullRequestDetail {
@@ -904,7 +977,15 @@ mod tests {
         assert_eq!(line_142.text.trim(), "self.reanchor_threads(cx);");
         assert_eq!(
             detail.merge_summary(),
-            "denis wants to merge 4 commits into main from feat/thread-view"
+            "denis wants to merge 4 commits into feat/repo-mapping from feat/thread-view"
+        );
+        let stack = detail.stack.as_ref().unwrap();
+        assert_eq!(stack.base_ref, "main");
+        let members: Vec<u64> = stack.entries.iter().map(|e| e.key.number()).collect();
+        assert_eq!(members, STACK);
+        assert_eq!(
+            detail.summary.stack,
+            Some(StackPosition::new(STACK_NUMBER, 4, 4))
         );
     }
 

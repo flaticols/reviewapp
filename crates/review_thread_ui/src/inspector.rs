@@ -9,8 +9,8 @@ use gpui_kit::component::{
     v_flex,
 };
 use gpui_kit::{
-    AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
-    StatefulInteractiveElement as _, Styled as _, TestSupportExt as _, div,
+    AnyElement, Context, FontWeight, InteractiveElement as _, IntoElement, ParentElement as _,
+    SharedString, StatefulInteractiveElement as _, Styled as _, TestSupportExt as _, div,
     prelude::FluentBuilder as _, rems,
 };
 use review_model::{PullRequestDetail, ReviewerState};
@@ -227,7 +227,76 @@ impl ReviewThreadView {
                     )
                     .children(checks),
             )
+            .children(self.render_stack(detail, cx))
             .children(self.render_depends(detail, cx))
+    }
+
+    /// The GitHub stack the pull request is part of: every member in merge order, the
+    /// open one marked, the others a click away.
+    fn render_stack(
+        &self,
+        detail: &PullRequestDetail,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement> {
+        let stack = detail.stack.as_ref()?;
+        let rows: Vec<_> = stack
+            .entries
+            .iter()
+            .map(|entry| {
+                let current = entry.key == self.key;
+                let title = format!("#{} {}", entry.key.number(), entry.title);
+                let label = if current {
+                    format!("{title}, this pull request")
+                } else {
+                    title.clone()
+                };
+                let key = entry.key.clone();
+                ListItem::new(SharedString::from(format!(
+                    "stack-entry-{}",
+                    entry.key.id()
+                )))
+                .h(rems(1.4375))
+                .px_2()
+                .rounded(cx.theme().radius)
+                .selected(current)
+                .accessibility_label(SharedString::from(label))
+                .when(!current, |this| {
+                    this.on_click(cx.listener(move |_, _, _, cx| {
+                        cx.emit(crate::ReviewThreadEvent::Open(key.clone()))
+                    }))
+                })
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .text_ui()
+                        .child(
+                            div()
+                                .flex_none()
+                                .w_3()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(entry.position.to_string()),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .when(current, |this| this.font_weight(FontWeight::MEDIUM))
+                                .child(title),
+                        )
+                        .child(PullRequestStateIcon::new(entry.state).small()),
+                )
+            })
+            .collect();
+        Some(
+            v_flex()
+                .gap_0p5()
+                .child(SectionHeader::new(format!(
+                    "Stack · into {}",
+                    stack.base_ref
+                )))
+                .children(rows),
+        )
     }
 
     fn render_depends(

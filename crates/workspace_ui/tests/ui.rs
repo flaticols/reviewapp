@@ -2238,3 +2238,182 @@ fn the_keyboard_keeps_its_row_on_screen_in_a_long_list(cx: &mut TestAppContext) 
     let grouped = assert_selection_shows(cx, "the grouped list scrolls to the selected row");
     assert_ne!(ungrouped, grouped, "the selection moved on");
 }
+
+fn switchfold_pr(number: u64) -> PullRequestKey {
+    PullRequestKey::new(RepoSlug::new("flaticols", "switchfold"), number)
+}
+
+#[gpui_kit::test]
+fn a_stack_shows_in_the_list_and_walks_from_the_inspector(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            on_screen(window, "stack:flaticols/switchfold#482"),
+            "a stacked row paints its stack marker"
+        );
+        for (number, label) in [(470, "Stack 2/4"), (477, "Stack 3/4"), (482, "Stack 4/4")] {
+            let row = window
+                .find(format!("flaticols/switchfold#{number}"))
+                .bounds();
+            let marker = window.find(format!("stack:flaticols/switchfold#{number}"));
+            assert_eq!(marker.label(), Some(label));
+            assert!(
+                row.contains(&marker.bounds().center()),
+                "#{number}'s marker sits inside its row"
+            );
+        }
+        assert!(
+            window.try_find("stack:flaticols/switchfold#479").is_none(),
+            "a pull request outside a stack has no marker"
+        );
+        window.click("flaticols/switchfold#470", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|cx| workspace.read(cx).reviewing(cx)),
+        Some(switchfold_pr(470))
+    );
+
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            on_screen(window, "stack-entry-flaticols/switchfold#477"),
+            "the inspector lists the stack's pull requests"
+        );
+        let entry = |number: u64| window.find(format!("stack-entry-flaticols/switchfold#{number}"));
+        assert_eq!(
+            entry(470).label(),
+            Some("#470 Fix hunk expansion off-by-one at end of file, this pull request"),
+            "the open pull request is marked in its stack"
+        );
+        assert_eq!(
+            entry(477).label(),
+            Some("#477 Map GitHub repositories to local worktrees")
+        );
+        assert_eq!(
+            entry(468).label(),
+            Some("#468 Split hunk rendering out of the diff view"),
+            "a merged member the list doesn't hold is still listed"
+        );
+        for pair in [468, 470, 477, 482].windows(2) {
+            assert!(
+                entry(pair[0]).bounds().top() < entry(pair[1]).bounds().top(),
+                "#{} is painted above #{}: the stack reads in merge order",
+                pair[0],
+                pair[1]
+            );
+        }
+        let inspector = window.find("inspector").bounds();
+        assert!(
+            inspector.contains(&entry(482).bounds().center()),
+            "the stack sits in the inspector"
+        );
+        window.click("stack-entry-flaticols/switchfold#482", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|cx| workspace.read(cx).reviewing(cx)),
+        Some(featured()),
+        "clicking another entry opens that pull request"
+    );
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("stack-entry-flaticols/switchfold#482").label(),
+            Some(
+                "#482 Render review thread as a single scroll with inline diffs, this pull request"
+            ),
+            "the mark moves to the pull request that opened"
+        );
+        assert_eq!(
+            window.find("stack-entry-flaticols/switchfold#470").label(),
+            Some("#470 Fix hunk expansion off-by-one at end of file")
+        );
+        window.click("stack-entry-flaticols/switchfold#468", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|cx| workspace.read(cx).reviewing(cx)),
+        Some(switchfold_pr(468)),
+        "a member outside the list opens too"
+    );
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("stack-entry-flaticols/switchfold#468").label(),
+            Some("#468 Split hunk rendering out of the diff view, this pull request"),
+            "its review loads and shows the stack"
+        );
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn a_queued_pull_request_says_so_in_the_list_and_the_merge_popover(cx: &mut TestAppContext) {
+    use app_state_ui::StoresExt as _;
+    let queued = PullRequestKey::new(RepoSlug::new("flaticols", "gathering-app"), 118);
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            on_screen(window, "merge-queue:flaticols/gathering-app#118"),
+            "a queued row paints its merge queue marker"
+        );
+        assert_eq!(
+            window
+                .find("merge-queue:flaticols/gathering-app#118")
+                .label(),
+            Some("In merge queue")
+        );
+        assert!(
+            window
+                .try_find("merge-queue:flaticols/switchfold#482")
+                .is_none(),
+            "a pull request outside the queue has no marker"
+        );
+        window.click("flaticols/gathering-app#118", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|cx| workspace.read(cx).reviewing(cx)),
+        Some(queued.clone())
+    );
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("merge").label(),
+            Some("Queued"),
+            "the title bar's Merge button says the pull request is queued"
+        );
+        window.click("merge", cx);
+    })
+    .unwrap();
+    settle(window, "merge-confirm", cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("merge-status").label(),
+            Some("In the merge queue, waiting for its checks."),
+            "the merge popover reports the queue"
+        );
+        window.click("merge-confirm", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|cx| {
+            cx.stores()
+                .pull_requests()
+                .read(cx)
+                .pull_request(&queued)
+                .map(|pr| pr.state)
+        }),
+        Some(pr_model::PullRequestState::Open),
+        "the queue merges it, so Merge is off"
+    );
+}
