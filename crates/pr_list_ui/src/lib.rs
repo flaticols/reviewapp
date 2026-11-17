@@ -12,7 +12,7 @@ use std::rc::Rc;
 use app_state_ui::actions::{
     FocusFilter, OpenSelected, Refresh, SelectNext, SelectPrevious, ToggleSidebar,
 };
-use app_state_ui::{ListState, PullRequestStore, StoresExt as _};
+use app_state_ui::{Activity, ListState, PullRequestStore, RowState, StoresExt as _};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     ActiveTheme as _, Icon, Sizable as _, VirtualListScrollHandle,
@@ -26,7 +26,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    FontWeight, InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Pixels,
+    FontWeight, Hsla, InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Pixels,
     Render, ScrollStrategy, SharedString, Size, StatefulInteractiveElement as _, StyleRefinement,
     Styled as _, Subscription, TestSupportExt as _, Window, div, px, rems, size,
 };
@@ -1024,9 +1024,9 @@ fn color_grid(
 /// An active filter as a chip: its name, its value, and how to clear it.
 type Chip = (&'static str, String, fn(&mut ListFilters));
 
-/// Sidebar labels at the design's 13 px chrome size; the component defaults to 14 px.
 /// The merge queue, one item per repository holding its queued pull requests in merge
-/// order, each with where it stands. `None` while nothing is queued.
+/// order, each titled and followed by an icon for where it stands. `None` while nothing
+/// is queued.
 fn merge_queue_menu(
     prs: &[PullRequest],
     view: Entity<PullRequestList>,
@@ -1051,26 +1051,33 @@ fn merge_queue_menu(
                 .default_open(true)
                 .click_to_toggle(true)
                 .children(keys.into_iter().map(|key| {
+                    // The title is what tells pull requests apart here; the number only
+                    // shows when the list hasn't loaded the pull request.
                     let title = match prs.iter().find(|pr| pr.key == key) {
-                        Some(pr) => format!("#{} {}", key.number(), pr.title),
+                        Some(pr) => pr.title.clone(),
                         None => format!("#{}", key.number()),
                     };
-                    let state = SharedString::from(queue.row(&key).label());
+                    let row = queue.row(&key);
+                    let state = SharedString::from(row.label());
                     let id = SharedString::from(format!("merge-queue-{}", key.id()));
                     let name = SharedString::from(format!("{title} · {state}"));
                     let view = view.clone();
                     let open_key = key.clone();
                     SidebarMenuItem::new(title)
                         .label_style(label_style())
-                        .icon(Icon::new(IconName::GitPullRequest))
                         .suffix(move |_, cx| {
+                            let (icon, color) = queue_state_icon(row, cx);
+                            let tooltip = state.clone();
                             div()
                                 .id(id.clone())
                                 .aria_label(name.clone())
                                 .test_support()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(state.clone())
+                                .flex_shrink_0()
+                                .tooltip(move |window, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(tooltip.clone())
+                                        .build(window, cx)
+                                })
+                                .child(Icon::new(icon).small().text_color(color))
                         })
                         .on_click(move |_, _, cx| {
                             let key = open_key.clone();
@@ -1107,6 +1114,23 @@ fn queued_row_menu(menu: PopupMenu, key: &PullRequestKey) -> PopupMenu {
         )
 }
 
+/// The icon and color for where a queued pull request stands.
+fn queue_state_icon(row: RowState, cx: &App) -> (IconName, Hsla) {
+    let theme = cx.theme();
+    match row {
+        RowState::Queued => (IconName::Clock, theme.muted_foreground),
+        RowState::Skipped(_) => (IconName::TriangleAlert, theme.warning),
+        RowState::Active(activity) => match activity {
+            Activity::Rebasing => (IconName::RefreshCw, theme.info),
+            Activity::Merging | Activity::AutoMergeOn => (IconName::GitMerge, theme.success),
+            Activity::WaitingForCi => (IconName::LoaderCircle, theme.warning),
+            Activity::WaitingForApproval => (IconName::UserCheck, theme.warning),
+            Activity::WaitingForGitHub => (IconName::Hourglass, theme.muted_foreground),
+        },
+    }
+}
+
+/// Sidebar labels at the design's 13 px chrome size; the component defaults to 14 px.
 fn label_style() -> StyleRefinement {
     StyleRefinement::default().text_ui()
 }

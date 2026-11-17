@@ -1700,11 +1700,37 @@ fn merge_queue_section_lists_rows_in_order(cx: &mut TestAppContext) {
     assert_eq!(
         merge_queue_rows(window, cx),
         [
-            "#482 Render review thread as a single scroll with inline diffs · Queued",
-            "#479 ACP: stream agent findings as draft comments · Queued"
+            "Render review thread as a single scroll with inline diffs · Queued",
+            "ACP: stream agent findings as draft comments · Queued"
         ],
-        "queued pull requests show in queue order"
+        "queued pull requests show by title, in queue order"
     );
+    let state_width = cx
+        .update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window
+                .find("merge-queue-flaticols/switchfold#482")
+                .bounds()
+                .size
+                .width
+        })
+        .unwrap();
+    assert!(
+        state_width <= gpui_kit::px(20.),
+        "the state is an icon, leaving the row's width to the title, not {state_width:?} of text"
+    );
+}
+
+#[gpui_kit::test]
+fn list_rows_set_the_repository_name_apart(cx: &mut TestAppContext) {
+    let (window, _) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let repo = window.find("repo:flaticols/switchfold#482");
+        assert!(repo.visible(), "the repository name is its own painted element");
+        assert_eq!(repo.label(), Some("switchfold"));
+    })
+    .unwrap();
 }
 
 #[gpui_kit::test]
@@ -1750,8 +1776,8 @@ fn merge_queue_move_down_reorders_rows(cx: &mut TestAppContext) {
     assert_eq!(
         titles,
         [
-            "#479 ACP: stream agent findings as draft comments",
-            "#482 Render review thread as a single scroll with inline diffs"
+            "ACP: stream agent findings as draft comments",
+            "Render review thread as a single scroll with inline diffs"
         ],
         "Move down swaps the row with the next one"
     );

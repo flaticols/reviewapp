@@ -111,15 +111,13 @@ impl RenderOnce for PullRequestRow {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let pr = &self.pull_request;
         let muted = cx.theme().muted_foreground;
-        let meta: SharedString = format!(
-            "#{} · {} · {} · {} → {}",
-            pr.key.number(),
-            pr.key.repo().name(),
-            pr.author,
-            pr.head_ref,
-            pr.base_ref
-        )
-        .into();
+        // The repository name stands out from the rest of the provenance, in the color the
+        // reviewer gave it, so rows from different repositories tell apart at a glance.
+        let repo_name: SharedString = pr.key.repo().name().clone().into();
+        let repo_text = self.repo_color.unwrap_or(cx.theme().foreground);
+        let number: SharedString = format!("#{} ·", pr.key.number()).into();
+        let meta: SharedString =
+            format!("· {} · {} → {}", pr.author, pr.head_ref, pr.base_ref).into();
         let (review_icon, review_color) = review_decision_icon(pr.review, cx);
         let label: SharedString = format!("#{} {}", pr.key.number(), pr.title).into();
 
@@ -175,6 +173,27 @@ impl RenderOnce for PullRequestRow {
                                             div().flex_shrink_0().size_2().rounded_full().bg(color),
                                         )
                                     })
+                                    .child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .text_meta()
+                                            .text_color(muted)
+                                            .child(number),
+                                    )
+                                    .child(
+                                        div()
+                                            .id(SharedString::from(format!(
+                                                "repo:{}",
+                                                pr.key.id()
+                                            )))
+                                            .aria_label(repo_name.clone())
+                                            .test_support()
+                                            .flex_shrink_0()
+                                            .text_meta()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(repo_text)
+                                            .child(repo_name),
+                                    )
                                     .child(
                                         div()
                                             .min_w_0()
