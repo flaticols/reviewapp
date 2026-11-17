@@ -3,6 +3,8 @@
 //! [`StoresExt::stores`] and observe them for changes.
 
 pub mod actions;
+mod merge_plan;
+pub use merge_plan::{Activity, RowState, Skip};
 mod pull_request_store;
 mod settings_store;
 
