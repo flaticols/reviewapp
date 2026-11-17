@@ -35,7 +35,8 @@ use theme_ui::TypographyExt as _;
 use widgets_ui::{Counter, EmptyState};
 
 pub use filters::{
-    CI_FILTERS, ListEntry, ListFilters, Scope, SortOrder, StateTab, entries, tab_count, visible,
+    CI_FILTERS, Grouping, ListEntry, ListFilters, Scope, SortOrder, StateTab, entries, tab_count,
+    visible,
 };
 pub use row::{PullRequestRow, SkeletonRow, review_decision_icon};
 pub use toolbar::{ListActions, ListTitle};
@@ -45,8 +46,8 @@ const CONTEXT: &str = "PullRequestList";
 /// A row's height in rem: the 3.5 rem item under the 0.125 rem gap that separates rows.
 const ROW_REMS: f32 = 3.625;
 
-/// A milestone header's height in rem.
-const MILESTONE_HEADER_REMS: f32 = 2.25;
+/// A group header's height in rem.
+const GROUP_HEADER_REMS: f32 = 2.25;
 
 /// Registers the list's key bindings. Call once at startup.
 pub fn init(cx: &mut App) {
@@ -190,14 +191,9 @@ impl PullRequestList {
     }
 
     /// Everything the list paints, in order: the pull requests in scope that pass the
-    /// filters, under milestone headers when the reviewer groups them.
+    /// filters, under milestone or stack headers when the reviewer groups them.
     fn entries<'a>(&self, store: &'a PullRequestStore, cx: &App) -> Vec<ListEntry<'a>> {
-        let grouped = cx
-            .stores()
-            .settings()
-            .read(cx)
-            .preferences()
-            .group_pull_requests_by_milestone;
+        let grouping = grouping(cx.stores().settings().read(cx).preferences());
         entries(
             visible(
                 store.pull_requests(),
@@ -205,7 +201,7 @@ impl PullRequestList {
                 store.saved_filters(),
                 &self.filters,
             ),
-            grouped,
+            grouping,
         )
     }
 
@@ -240,7 +236,7 @@ impl PullRequestList {
                 None if delta >= 0 => 0,
                 None => rows.len() - 1,
             };
-            // The first row scrolls to the top so its milestone header comes with it.
+            // The first row scrolls to the top so its group header comes with it.
             let entry_ix = if next == 0 { 0 } else { rows[next].0 };
             (entry_ix, rows[next].1.clone())
         };
@@ -560,9 +556,10 @@ impl PullRequestList {
             .entries(store, cx)
             .iter()
             .map(|entry| {
-                let height = match entry {
-                    ListEntry::Milestone { .. } => MILESTONE_HEADER_REMS,
-                    ListEntry::PullRequest(_) => ROW_REMS,
+                let height = if entry.is_header() {
+                    GROUP_HEADER_REMS
+                } else {
+                    ROW_REMS
                 };
                 size(px(0.), rem * height)
             })
@@ -594,6 +591,9 @@ impl PullRequestList {
                 let pr = match entry {
                     ListEntry::Milestone { title, count } => {
                         return milestone_header(title, count, cx);
+                    }
+                    ListEntry::Stack { stack, count, size } => {
+                        return stack_header(stack, count, size, cx);
                     }
                     ListEntry::PullRequest(pr) => pr,
                 };
@@ -718,19 +718,74 @@ impl PullRequestList {
     }
 }
 
+/// The grouping the reviewer chose. The list groups one way at a time; a settings file
+/// with both on groups by stack.
+pub fn grouping(preferences: &settings_model::Preferences) -> Grouping {
+    if preferences.group_pull_requests_by_stack {
+        Grouping::Stack
+    } else if preferences.group_pull_requests_by_milestone {
+        Grouping::Milestone
+    } else {
+        Grouping::None
+    }
+}
+
 /// The header above a milestone's pull requests: its title, or "No milestone", and how
-/// many pull requests follow. It lines up with the rows' state icons.
+/// many pull requests follow.
 fn milestone_header(title: Option<&str>, count: usize, cx: &App) -> AnyElement {
     let id = match title {
         Some(title) => format!("milestone:{title}"),
         None => "no-milestone".to_string(),
     };
-    let label = SharedString::from(title.unwrap_or("No milestone").to_string());
+    group_header(
+        id,
+        title.unwrap_or("No milestone").to_string(),
+        count,
+        None,
+        cx,
+    )
+}
+
+/// The header above a stack's pull requests: the stack's number and repository, or
+/// "Not in a stack", and how many pull requests follow. A stack with members the list
+/// doesn't show adds the stack's size, as in "3 of 4".
+fn stack_header(
+    stack: Option<(&RepoSlug, u64)>,
+    count: usize,
+    size: usize,
+    cx: &App,
+) -> AnyElement {
+    let Some((repo, number)) = stack else {
+        return group_header("no-stack".into(), "Not in a stack".into(), count, None, cx);
+    };
+    group_header(
+        format!("stack-group:{repo}#{number}"),
+        format!("Stack #{number} · {}", repo.name()),
+        count,
+        (count < size).then(|| format!("of {size}")),
+        cx,
+    )
+}
+
+/// A group's header: its label, how many pull requests follow and an optional note
+/// after the count. It lines up with the rows' state icons.
+fn group_header(
+    id: String,
+    label: String,
+    count: usize,
+    note: Option<String>,
+    cx: &App,
+) -> AnyElement {
+    let label = SharedString::from(label);
+    let name = match &note {
+        Some(note) => SharedString::from(format!("{label}, {count} {note}")),
+        None => label.clone(),
+    };
     h_flex()
         .id(SharedString::from(id))
-        .aria_label(label.clone())
+        .aria_label(name)
         .test_support()
-        .h(rems(MILESTONE_HEADER_REMS))
+        .h(rems(GROUP_HEADER_REMS))
         .px_5()
         .pb_1()
         .gap_2()
@@ -745,6 +800,13 @@ fn milestone_header(title: Option<&str>, count: usize, cx: &App) -> AnyElement {
                 .child(label),
         )
         .child(Counter::new(count))
+        .children(note.map(|note| {
+            div()
+                .flex_shrink_0()
+                .text_meta()
+                .text_color(cx.theme().muted_foreground)
+                .child(note)
+        }))
         .into_any_element()
 }
 

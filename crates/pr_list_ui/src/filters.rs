@@ -213,6 +213,18 @@ pub fn visible<'a>(
     visible
 }
 
+/// How the list arranges its rows under headers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Grouping {
+    /// No headers.
+    #[default]
+    None,
+    /// Under the GitHub milestone each pull request is assigned to.
+    Milestone,
+    /// Under the GitHub stack each pull request belongs to.
+    Stack,
+}
+
 /// One painted item of the list, in display order.
 #[derive(Clone, Copy, Debug)]
 pub enum ListEntry<'a> {
@@ -221,6 +233,14 @@ pub enum ListEntry<'a> {
     Milestone {
         title: Option<&'a str>,
         count: usize,
+    },
+    /// The header of a stack's group: the stack's repository and number, or `None` for
+    /// pull requests outside a stack, how many pull requests follow it, and how many
+    /// the whole stack holds, which is more when some members aren't listed.
+    Stack {
+        stack: Option<(&'a RepoSlug, u64)>,
+        count: usize,
+        size: usize,
     },
     /// A pull request row.
     PullRequest(&'a PullRequest),
@@ -231,20 +251,31 @@ impl<'a> ListEntry<'a> {
     pub fn pull_request(self) -> Option<&'a PullRequest> {
         match self {
             Self::PullRequest(pull_request) => Some(pull_request),
-            Self::Milestone { .. } => None,
+            Self::Milestone { .. } | Self::Stack { .. } => None,
         }
+    }
+
+    /// Whether the entry is a group's header.
+    pub fn is_header(self) -> bool {
+        self.pull_request().is_none()
     }
 }
 
-/// What the list paints for `rows`, which are already filtered and sorted. Grouped by
-/// milestone, each milestone's header precedes its pull requests: milestones in title
-/// order ignoring case, pull requests without one last, and `rows`' order kept inside
-/// each group. Milestones are matched by title, so the same title in two repositories
-/// is one group.
-pub fn entries<'a>(rows: Vec<&'a PullRequest>, group_by_milestone: bool) -> Vec<ListEntry<'a>> {
-    if !group_by_milestone {
-        return rows.into_iter().map(ListEntry::PullRequest).collect();
+/// What the list paints for `rows`, which are already filtered and sorted: the rows
+/// alone, or under headers by `grouping`.
+pub fn entries<'a>(rows: Vec<&'a PullRequest>, grouping: Grouping) -> Vec<ListEntry<'a>> {
+    match grouping {
+        Grouping::None => rows.into_iter().map(ListEntry::PullRequest).collect(),
+        Grouping::Milestone => by_milestone(rows),
+        Grouping::Stack => by_stack(rows),
     }
+}
+
+/// Each milestone's header before its pull requests: milestones in title order
+/// ignoring case, pull requests without one last, and `rows`' order kept inside each
+/// group. Milestones are matched by title, so the same title in two repositories is
+/// one group.
+fn by_milestone<'a>(rows: Vec<&'a PullRequest>) -> Vec<ListEntry<'a>> {
     let mut titles: Vec<Option<&str>> = rows.iter().map(|pr| pr.milestone.as_deref()).collect();
     titles.sort_by_key(|title| (title.is_none(), title.map(str::to_lowercase), *title));
     titles.dedup();
@@ -256,6 +287,54 @@ pub fn entries<'a>(rows: Vec<&'a PullRequest>, group_by_milestone: bool) -> Vec<
             count: members.clone().count(),
         });
         entries.extend(members.map(|pr| ListEntry::PullRequest(pr)));
+    }
+    entries
+}
+
+/// Each stack's header before its pull requests. A stack is a repository and a stack
+/// number. Stacks come in the order `rows` first reaches them, so the sort orders the
+/// groups; inside a stack the pull requests are in merge order, position 1 first,
+/// because that order is what a stack means. Pull requests outside a stack go last, in
+/// `rows`' order.
+fn by_stack<'a>(rows: Vec<&'a PullRequest>) -> Vec<ListEntry<'a>> {
+    let stack_of = |pr: &'a PullRequest| pr.stack.map(|stack| (pr.key.repo(), stack.number()));
+    let mut stacks: Vec<(&RepoSlug, u64)> = Vec::new();
+    for stack in rows.iter().filter_map(|pr| stack_of(pr)) {
+        if !stacks.contains(&stack) {
+            stacks.push(stack);
+        }
+    }
+    let mut entries = Vec::with_capacity(rows.len() + stacks.len() + 1);
+    for stack in stacks {
+        let mut members: Vec<&PullRequest> = rows
+            .iter()
+            .copied()
+            .filter(|pr| stack_of(pr) == Some(stack))
+            .collect();
+        members.sort_by_key(|pr| pr.stack.map(|stack| stack.position()));
+        let size = members
+            .first()
+            .and_then(|pr| pr.stack)
+            .map_or(members.len(), |stack| stack.size() as usize);
+        entries.push(ListEntry::Stack {
+            stack: Some(stack),
+            count: members.len(),
+            size,
+        });
+        entries.extend(members.into_iter().map(ListEntry::PullRequest));
+    }
+    let unstacked: Vec<&PullRequest> = rows
+        .iter()
+        .copied()
+        .filter(|pr| pr.stack.is_none())
+        .collect();
+    if !unstacked.is_empty() {
+        entries.push(ListEntry::Stack {
+            stack: None,
+            count: unstacked.len(),
+            size: unstacked.len(),
+        });
+        entries.extend(unstacked.into_iter().map(ListEntry::PullRequest));
     }
     entries
 }
@@ -343,9 +422,69 @@ mod tests {
                 ListEntry::Milestone { title, count } => {
                     format!("[{} {count}]", title.unwrap_or("none"))
                 }
+                ListEntry::Stack { stack, count, size } => match stack {
+                    Some((repo, number)) => format!("[{}#{number} {count}/{size}]", repo.name()),
+                    None => format!("[none {count}]"),
+                },
                 ListEntry::PullRequest(pr) => pr.key.number().to_string(),
             })
             .collect()
+    }
+
+    #[test]
+    fn stacks_group_in_sort_order_with_members_in_merge_order() {
+        let (prs, saved) = data();
+        let rows = visible(
+            &prs,
+            &Scope::Inbox(Inbox::ReviewRequested),
+            &saved,
+            &ListFilters::default(),
+        );
+        // Recently updated puts #482, the top of the stack, first; its group still
+        // reads from the base up, and #468 has merged, so three of four are listed.
+        assert_eq!(
+            outline(&entries(rows, Grouping::Stack)),
+            [
+                "[switchfold#12 3/4]",
+                "470",
+                "477",
+                "482",
+                "[none 5]",
+                "479",
+                "121",
+                "118",
+                "475",
+                "42"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_same_stack_number_in_two_repositories_is_two_groups() {
+        use pr_model::{PullRequestKey, StackPosition};
+        let stacked = |repo: &str, number, position| {
+            let mut pr = PullRequest::new(
+                PullRequestKey::new(RepoSlug::new("o", repo), number),
+                "t",
+                "a",
+                "h",
+                "main",
+                Timestamp::from_unix(0),
+            );
+            pr.stack = Some(StackPosition::new(1, position, 2));
+            pr
+        };
+        let prs = [
+            stacked("b", 20, 2),
+            stacked("a", 10, 1),
+            stacked("b", 21, 1),
+            stacked("a", 11, 2),
+        ];
+        assert_eq!(
+            outline(&entries(prs.iter().collect(), Grouping::Stack)),
+            ["[b#1 2/2]", "21", "20", "[a#1 2/2]", "10", "11"],
+            "no \"Not in a stack\" header when every row is stacked"
+        );
     }
 
     #[test]
@@ -358,7 +497,7 @@ mod tests {
             &ListFilters::default(),
         );
         assert_eq!(
-            outline(&entries(rows, true)),
+            outline(&entries(rows, Grouping::Milestone)),
             [
                 "[v0.9 3]", "482", "479", "477", "[v1.0 3]", "121", "475", "470", "[none 2]",
                 "118", "42"
@@ -380,7 +519,7 @@ mod tests {
             &filters,
         );
         assert_eq!(
-            outline(&entries(rows, true)),
+            outline(&entries(rows, Grouping::Milestone)),
             [
                 "[v0.9 3]", "477", "479", "482", "[v1.0 3]", "470", "475", "121", "[none 2]", "42",
                 "118"
@@ -410,7 +549,7 @@ mod tests {
             with(4, Some("beta")),
         ];
         assert_eq!(
-            outline(&entries(prs.iter().collect(), true)),
+            outline(&entries(prs.iter().collect(), Grouping::Milestone)),
             ["[Alpha 1]", "3", "[beta 2]", "2", "4", "[none 1]", "1"]
         );
     }
@@ -425,7 +564,7 @@ mod tests {
             &ListFilters::default(),
         );
         assert_eq!(
-            outline(&entries(rows, false)),
+            outline(&entries(rows, Grouping::None)),
             ["482", "479", "121", "477", "118", "475", "42", "470"]
         );
     }

@@ -2417,3 +2417,124 @@ fn a_queued_pull_request_says_so_in_the_list_and_the_merge_popover(cx: &mut Test
         "the queue merges it, so Merge is off"
     );
 }
+
+#[gpui_kit::test]
+fn the_sort_menu_groups_the_list_by_stack(cx: &mut TestAppContext) {
+    use app_state_ui::StoresExt as _;
+    const STACK: &str = "stack-group:flaticols/switchfold#12";
+    let preferences = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            let preferences = cx.stores().settings().read(cx).preferences();
+            (
+                preferences.group_pull_requests_by_stack,
+                preferences.group_pull_requests_by_milestone,
+            )
+        })
+    };
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(!on_screen(window, STACK), "the list starts ungrouped");
+        window.click("list-sort", cx);
+    })
+    .unwrap();
+    // Three orders, a separator, Group by milestone, Group by stack.
+    pick_menu_item(window, 5, cx);
+    assert_eq!(
+        preferences(cx),
+        (true, false),
+        "the menu item turns the preference on"
+    );
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            on_screen(window, STACK),
+            "a stack header is painted above its pull requests"
+        );
+        assert_eq!(
+            window.find(STACK).label(),
+            Some("Stack #12 · switchfold, 3 of 4"),
+            "the header says the list holds three of the stack's four"
+        );
+        assert_eq!(window.find("no-stack").label(), Some("Not in a stack"));
+        let top = |id: &'static str| window.find(id).bounds().top();
+        let painted = [
+            STACK,
+            "flaticols/switchfold#470",
+            "flaticols/switchfold#477",
+            "flaticols/switchfold#482",
+            "no-stack",
+            "flaticols/switchfold#479",
+            "flaticols/gathering-app#121",
+        ];
+        for pair in painted.windows(2) {
+            assert!(
+                top(pair[0]) < top(pair[1]),
+                "{} is painted above {}",
+                pair[0],
+                pair[1]
+            );
+        }
+        window.press("down", cx);
+        window.press("enter", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|cx| workspace.read(cx).reviewing(cx)),
+        Some(switchfold_pr(470)),
+        "the keyboard starts at the stack's first pull request, not the sort's"
+    );
+
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.press("escape", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("list-sort", cx);
+    })
+    .unwrap();
+    pick_menu_item(window, 4, cx);
+    assert_eq!(
+        preferences(cx),
+        (false, true),
+        "grouping by milestone replaces grouping by stack"
+    );
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            !on_screen(window, STACK) && on_screen(window, "milestone:v0.9"),
+            "milestone headers take the stack headers' place"
+        );
+        window.click("list-sort", cx);
+    })
+    .unwrap();
+    pick_menu_item(window, 5, cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("list-sort", cx);
+    })
+    .unwrap();
+    pick_menu_item(window, 5, cx);
+    assert_eq!(
+        preferences(cx),
+        (false, false),
+        "picking the checked grouping ungroups the list"
+    );
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            !on_screen(window, STACK) && !on_screen(window, "no-stack"),
+            "the headers go"
+        );
+        assert!(
+            window.find("flaticols/switchfold#482").bounds().top()
+                < window.find("flaticols/switchfold#470").bounds().top(),
+            "the rows return to the sort's order"
+        );
+    })
+    .unwrap();
+}

@@ -1,6 +1,6 @@
 //! The pull request list's controls, placed in the title bar: the scope's name and
 //! open count on the left; filter text, the Filter and Sort menus and Refresh on the
-//! right. The Sort menu also groups the list by milestone. Filters beyond the state stay visible as removable chips above the list.
+//! right. The Sort menu also groups the list by milestone or by stack. Filters beyond the state stay visible as removable chips above the list.
 
 use app_state_ui::StoresExt as _;
 use app_state_ui::actions::Refresh;
@@ -20,7 +20,9 @@ use pr_model::{CheckStatus, PullRequest, RepoSlug, ReviewDecision};
 use theme_ui::{ActiveAppTheme as _, TypographyExt as _};
 use widgets_ui::{Counter, EditMenu};
 
-use crate::{CI_FILTERS, ListFilters, PullRequestList, SortOrder, StateTab, filters, tab_count};
+use crate::{
+    CI_FILTERS, Grouping, ListFilters, PullRequestList, SortOrder, StateTab, filters, tab_count,
+};
 
 /// The scope's name and how many of its pull requests are open, for the title bar.
 #[derive(IntoElement)]
@@ -301,12 +303,7 @@ impl RenderOnce for ListActions {
 
         let sort_list = self.list.clone();
         let current_sort = filters.sort;
-        let grouped = cx
-            .stores()
-            .settings()
-            .read(cx)
-            .preferences()
-            .group_pull_requests_by_milestone;
+        let grouping = crate::grouping(cx.stores().settings().read(cx).preferences());
         let sort = Button::new("list-sort")
             .ghost()
             .small()
@@ -323,17 +320,27 @@ impl RenderOnce for ListActions {
                             .on_click(move |_, _, cx| update(&list, cx, |f| f.sort = order)),
                     )
                 });
-                menu.separator().item(
-                    PopupMenuItem::new("Group by milestone")
-                        .checked(grouped)
+                let group_item = |label: &'static str, choice: Grouping| {
+                    PopupMenuItem::new(label)
+                        .checked(grouping == choice)
                         .on_click(move |_, _, cx| {
+                            let next = if grouping == choice {
+                                Grouping::None
+                            } else {
+                                choice
+                            };
                             cx.stores().settings().clone().update(cx, |settings, cx| {
                                 settings.update_preferences(cx, |p| {
-                                    p.group_pull_requests_by_milestone = !grouped
+                                    p.group_pull_requests_by_milestone =
+                                        next == Grouping::Milestone;
+                                    p.group_pull_requests_by_stack = next == Grouping::Stack;
                                 })
                             })
-                        }),
-                )
+                        })
+                };
+                menu.separator()
+                    .item(group_item("Group by milestone", Grouping::Milestone))
+                    .item(group_item("Group by stack", Grouping::Stack))
             });
 
         h_flex()

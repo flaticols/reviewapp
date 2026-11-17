@@ -432,6 +432,9 @@ pub struct Preferences {
     pub group_repositories_by_owner: bool,
     /// Lists pull requests under the GitHub milestone they are assigned to.
     pub group_pull_requests_by_milestone: bool,
+    /// Lists pull requests under the GitHub stack they belong to. The list groups one
+    /// way at a time, so this and the milestone grouping are not both on.
+    pub group_pull_requests_by_stack: bool,
 }
 
 /// A color the reviewer gives a repository, to tell it apart in the sidebar and the
@@ -585,6 +588,7 @@ impl Default for Preferences {
             folded_sections: Vec::new(),
             group_repositories_by_owner: false,
             group_pull_requests_by_milestone: false,
+            group_pull_requests_by_stack: false,
             inspector_collapsed: false,
             outline_collapsed: false,
         }
