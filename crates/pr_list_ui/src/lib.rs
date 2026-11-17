@@ -7,6 +7,7 @@ mod sidebar;
 mod toolbar;
 
 use std::ops::Range;
+use std::rc::Rc;
 
 use app_state_ui::actions::{
     FocusFilter, OpenSelected, Refresh, SelectNext, SelectPrevious, ToggleSidebar,
@@ -14,30 +15,38 @@ use app_state_ui::actions::{
 use app_state_ui::{ListState, PullRequestStore, StoresExt as _};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, Sizable as _,
+    ActiveTheme as _, Icon, Sizable as _, VirtualListScrollHandle,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{InputEvent, InputState},
     menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
     resizable::{h_resizable, resizable_panel},
     sidebar::{Sidebar, SidebarCollapsible, SidebarMenu, SidebarMenuItem},
-    v_flex,
+    v_flex, v_virtual_list,
 };
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Render, ScrollStrategy,
-    SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled as _, Subscription,
-    TestSupportExt as _, UniformListScrollHandle, Window, div, px, uniform_list,
+    FontWeight, InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _, Pixels,
+    Render, ScrollStrategy, SharedString, Size, StatefulInteractiveElement as _, StyleRefinement,
+    Styled as _, Subscription, TestSupportExt as _, Window, div, px, rems, size,
 };
 use pr_model::{Inbox, PullRequest, PullRequestKey, RepoSlug};
 use theme_ui::TypographyExt as _;
 use widgets_ui::{Counter, EmptyState};
 
-pub use filters::{CI_FILTERS, ListFilters, Scope, SortOrder, StateTab, tab_count, visible};
+pub use filters::{
+    CI_FILTERS, ListEntry, ListFilters, Scope, SortOrder, StateTab, entries, tab_count, visible,
+};
 pub use row::{PullRequestRow, SkeletonRow, review_decision_icon};
 pub use toolbar::{ListActions, ListTitle};
 
 const CONTEXT: &str = "PullRequestList";
+
+/// A row's height in rem: the 3.5 rem item under the 0.125 rem gap that separates rows.
+const ROW_REMS: f32 = 3.625;
+
+/// A milestone header's height in rem.
+const MILESTONE_HEADER_REMS: f32 = 2.25;
 
 /// Registers the list's key bindings. Call once at startup.
 pub fn init(cx: &mut App) {
@@ -71,7 +80,7 @@ pub struct PullRequestList {
     filters: ListFilters,
     selected: Option<PullRequestKey>,
     sidebar_collapsed: bool,
-    scroll_handle: UniformListScrollHandle,
+    scroll_handle: VirtualListScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -92,8 +101,10 @@ impl PullRequestList {
                 .context_menu(false)
         });
         let store = cx.stores().pull_requests().clone();
+        let settings = cx.stores().settings().clone();
         let mut subscriptions = vec![
             cx.observe(&store, |_, _, cx| cx.notify()),
+            cx.observe(&settings, |_, _, cx| cx.notify()),
             cx.subscribe(
                 &filter_input,
                 |this: &mut Self, input, event: &InputEvent, cx| {
@@ -114,7 +125,7 @@ impl PullRequestList {
             filters: ListFilters::default(),
             selected: None,
             sidebar_collapsed: false,
-            scroll_handle: UniformListScrollHandle::new(),
+            scroll_handle: VirtualListScrollHandle::new(),
             _subscriptions: subscriptions,
         }
     }
@@ -178,36 +189,64 @@ impl PullRequestList {
         cx.notify();
     }
 
+    /// Everything the list paints, in order: the pull requests in scope that pass the
+    /// filters, under milestone headers when the reviewer groups them.
+    fn entries<'a>(&self, store: &'a PullRequestStore, cx: &App) -> Vec<ListEntry<'a>> {
+        let grouped = cx
+            .stores()
+            .settings()
+            .read(cx)
+            .preferences()
+            .group_pull_requests_by_milestone;
+        entries(
+            visible(
+                store.pull_requests(),
+                &self.scope,
+                store.saved_filters(),
+                &self.filters,
+            ),
+            grouped,
+        )
+    }
+
+    /// The pull requests the list shows, in the order it paints them.
     fn visible_keys(&self, cx: &App) -> Vec<PullRequestKey> {
         let store = cx.stores().pull_requests().read(cx);
-        visible(
-            store.pull_requests(),
-            &self.scope,
-            store.saved_filters(),
-            &self.filters,
-        )
-        .into_iter()
-        .map(|pr| pr.key.clone())
-        .collect()
+        self.entries(store, cx)
+            .into_iter()
+            .filter_map(ListEntry::pull_request)
+            .map(|pr| pr.key.clone())
+            .collect()
     }
 
     fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let keys = self.visible_keys(cx);
-        if keys.is_empty() {
-            return;
-        }
-        let current = self
-            .selected
-            .as_ref()
-            .and_then(|key| keys.iter().position(|candidate| candidate == key));
-        let next = match current {
-            Some(ix) => (ix as isize + delta).clamp(0, keys.len() as isize - 1) as usize,
-            None if delta >= 0 => 0,
-            None => keys.len() - 1,
+        let (entry_ix, key) = {
+            let store = cx.stores().pull_requests().read(cx);
+            let entries = self.entries(store, cx);
+            let rows: Vec<(usize, &PullRequestKey)> = entries
+                .iter()
+                .enumerate()
+                .filter_map(|(ix, entry)| entry.pull_request().map(|pr| (ix, &pr.key)))
+                .collect();
+            if rows.is_empty() {
+                return;
+            }
+            let current = self
+                .selected
+                .as_ref()
+                .and_then(|key| rows.iter().position(|(_, candidate)| *candidate == key));
+            let next = match current {
+                Some(ix) => (ix as isize + delta).clamp(0, rows.len() as isize - 1) as usize,
+                None if delta >= 0 => 0,
+                None => rows.len() - 1,
+            };
+            // The first row scrolls to the top so its milestone header comes with it.
+            let entry_ix = if next == 0 { 0 } else { rows[next].0 };
+            (entry_ix, rows[next].1.clone())
         };
-        self.selected = Some(keys[next].clone());
+        self.selected = Some(key);
         self.scroll_handle
-            .scroll_to_item(next, ScrollStrategy::Nearest);
+            .scroll_to_item(entry_ix, ScrollStrategy::Nearest);
         cx.notify();
     }
 
@@ -516,21 +555,27 @@ impl PullRequestList {
             ListState::Loaded => {}
         }
 
-        let count = visible(
-            store.pull_requests(),
-            &self.scope,
-            store.saved_filters(),
-            &self.filters,
-        )
-        .len();
-        if count == 0 {
+        let rem = window.rem_size();
+        let sizes: Vec<Size<Pixels>> = self
+            .entries(store, cx)
+            .iter()
+            .map(|entry| {
+                let height = match entry {
+                    ListEntry::Milestone { .. } => MILESTONE_HEADER_REMS,
+                    ListEntry::PullRequest(_) => ROW_REMS,
+                };
+                size(px(0.), rem * height)
+            })
+            .collect();
+        if sizes.is_empty() {
             return self.render_empty(window, cx);
         }
 
-        uniform_list(
+        v_virtual_list(
+            cx.entity(),
             "pull-requests",
-            count,
-            cx.processor(|this, range: Range<usize>, _, cx| this.row_elements(range, cx)),
+            Rc::new(sizes),
+            |this, range: Range<usize>, _, cx| this.row_elements(range, cx),
         )
         .track_scroll(&self.scroll_handle)
         .size_full()
@@ -541,64 +586,67 @@ impl PullRequestList {
         let view = cx.entity();
         let store = cx.stores().pull_requests().read(cx);
         let now = store.now();
-        visible(
-            store.pull_requests(),
-            &self.scope,
-            store.saved_filters(),
-            &self.filters,
-        )
-        .into_iter()
-        .enumerate()
-        .skip(range.start)
-        .take(range.len())
-        .map(|(_, pr)| {
-            let key = pr.key.clone();
-            let view = view.clone();
-            let target = pr_actions_ui::PullRequestTarget::of(pr);
-            let agent_view = view.clone();
-            div()
-                .id(SharedString::from(format!("row-{}", pr.key.id())))
-                .px_2()
-                .pt_0p5()
-                .context_menu(move |menu, _, _| {
-                    let agent_view = agent_view.clone();
-                    let agent_key = target.key.clone();
-                    pr_actions_ui::pull_request_menu(
-                        menu,
-                        &target,
-                        Some(std::rc::Rc::new(move |_, cx| {
-                            agent_view.update(cx, |_, cx| {
-                                cx.emit(PullRequestListEvent::ReviewWithAgent(agent_key.clone()))
-                            })
-                        })),
+        self.entries(store, cx)
+            .into_iter()
+            .skip(range.start)
+            .take(range.len())
+            .map(|entry| {
+                let pr = match entry {
+                    ListEntry::Milestone { title, count } => {
+                        return milestone_header(title, count, cx);
+                    }
+                    ListEntry::PullRequest(pr) => pr,
+                };
+                let key = pr.key.clone();
+                let view = view.clone();
+                let target = pr_actions_ui::PullRequestTarget::of(pr);
+                let agent_view = view.clone();
+                div()
+                    .id(SharedString::from(format!("row-{}", pr.key.id())))
+                    .h(rems(ROW_REMS))
+                    .px_2()
+                    .pt_0p5()
+                    .context_menu(move |menu, _, _| {
+                        let agent_view = agent_view.clone();
+                        let agent_key = target.key.clone();
+                        pr_actions_ui::pull_request_menu(
+                            menu,
+                            &target,
+                            Some(std::rc::Rc::new(move |_, cx| {
+                                agent_view.update(cx, |_, cx| {
+                                    cx.emit(PullRequestListEvent::ReviewWithAgent(
+                                        agent_key.clone(),
+                                    ))
+                                })
+                            })),
+                        )
+                    })
+                    .child(
+                        PullRequestRow::new(pr.clone(), now)
+                            .selected(self.selected.as_ref() == Some(&pr.key))
+                            .triage(
+                                triage_ui::TriageStoreExt::triage(&**cx)
+                                    .and_then(|store| store.read(cx).pull_request(&pr.key)),
+                            )
+                            .repo_color(
+                                cx.stores()
+                                    .settings()
+                                    .read(cx)
+                                    .preferences()
+                                    .repository_color(&pr.key.repo().to_string())
+                                    .map(|color| theme_ui::repository_color(color, cx)),
+                            )
+                            .on_click(move |_, window, cx| {
+                                let key = key.clone();
+                                view.update(cx, |this, cx| {
+                                    window.focus(&this.focus_handle, cx);
+                                    this.open(key, cx)
+                                })
+                            }),
                     )
-                })
-                .child(
-                    PullRequestRow::new(pr.clone(), now)
-                        .selected(self.selected.as_ref() == Some(&pr.key))
-                        .triage(
-                            triage_ui::TriageStoreExt::triage(&**cx)
-                                .and_then(|store| store.read(cx).pull_request(&pr.key)),
-                        )
-                        .repo_color(
-                            cx.stores()
-                                .settings()
-                                .read(cx)
-                                .preferences()
-                                .repository_color(&pr.key.repo().to_string())
-                                .map(|color| theme_ui::repository_color(color, cx)),
-                        )
-                        .on_click(move |_, window, cx| {
-                            let key = key.clone();
-                            view.update(cx, |this, cx| {
-                                window.focus(&this.focus_handle, cx);
-                                this.open(key, cx)
-                            })
-                        }),
-                )
-                .into_any_element()
-        })
-        .collect()
+                    .into_any_element()
+            })
+            .collect()
     }
 
     fn render_empty(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -668,6 +716,36 @@ impl PullRequestList {
             )
             .into_any_element()
     }
+}
+
+/// The header above a milestone's pull requests: its title, or "No milestone", and how
+/// many pull requests follow. It lines up with the rows' state icons.
+fn milestone_header(title: Option<&str>, count: usize, cx: &App) -> AnyElement {
+    let id = match title {
+        Some(title) => format!("milestone:{title}"),
+        None => "no-milestone".to_string(),
+    };
+    let label = SharedString::from(title.unwrap_or("No milestone").to_string());
+    h_flex()
+        .id(SharedString::from(id))
+        .aria_label(label.clone())
+        .test_support()
+        .h(rems(MILESTONE_HEADER_REMS))
+        .px_5()
+        .pb_1()
+        .gap_2()
+        .items_end()
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_ui()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(cx.theme().foreground)
+                .child(label),
+        )
+        .child(Counter::new(count))
+        .into_any_element()
 }
 
 /// Repositories to list in the sidebar with their open pull request counts: every mapped
@@ -920,6 +998,7 @@ impl PullRequestList {
             .child(
                 div()
                     .id("pull-request-rows")
+                    .test_support()
                     .key_context(CONTEXT)
                     .track_focus(&self.focus_handle)
                     .flex_1()

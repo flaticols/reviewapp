@@ -336,6 +336,13 @@ fn pull_requests(now: Timestamp) -> Vec<PullRequest> {
         .into_iter()
         .map(|row| row.into_pull_request(now))
         .collect();
+    for pull_request in &mut pull_requests {
+        pull_request.milestone = match pull_request.key.number() {
+            482 | 479 | 477 => Some("v0.9".to_string()),
+            475 | 470 | 121 => Some("v1.0".to_string()),
+            _ => None,
+        };
+    }
     pull_requests.extend(backlog(now));
     pull_requests
 }

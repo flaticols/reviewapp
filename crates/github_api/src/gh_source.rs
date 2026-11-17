@@ -131,6 +131,7 @@ query($query: String!, $first: Int!) {
         comments { totalCount }
         reviewThreads { totalCount }
         labels(first: 10) { nodes { name } }
+        milestone { title }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
         bodyText additions deletions changedFiles
         files(first: 40) { nodes { path } }
@@ -154,6 +155,7 @@ query($owner: String!, $name: String!, $number: Int!) {
       repository { nameWithOwner }
       comments { totalCount }
       labels(first: 10) { nodes { name } }
+      milestone { title }
       commits(last: 100) { nodes { commit { oid messageHeadline statusCheckRollup { state } } } }
       reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login name } ... on Team { name } ... on Bot { login } } } }
       latestReviews(first: 30) { nodes { author { login ... on User { name } } state } }
@@ -294,6 +296,7 @@ fn summary_from(node: &Value) -> Option<PullRequest> {
                 .collect()
         })
         .unwrap_or_default();
+    pull_request.milestone = node["milestone"]["title"].as_str().map(str::to_string);
     pull_request.body_excerpt = node["bodyText"]
         .as_str()
         .unwrap_or_default()
@@ -1069,6 +1072,7 @@ mod tests {
             "reviewDecision": "CHANGES_REQUESTED",
             "comments": { "totalCount": 2 }, "reviewThreads": { "totalCount": 3 },
             "labels": { "nodes": [{ "name": "bug" }] },
+            "milestone": { "title": "v1.0" },
             "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "state": "FAILURE" } } }] }
         });
         let pr = summary_from(&node).unwrap();
@@ -1077,6 +1081,17 @@ mod tests {
         assert_eq!(pr.ci, Some(CheckStatus::Failed));
         assert_eq!(pr.comments, 5);
         assert!(pr.has_label("bug"));
+        assert_eq!(pr.milestone.as_deref(), Some("v1.0"));
+    }
+
+    #[test]
+    fn a_summary_without_a_milestone_has_none() {
+        let node = json!({
+            "number": 7, "title": "T", "state": "OPEN",
+            "repository": { "nameWithOwner": "o/r" },
+            "milestone": null
+        });
+        assert_eq!(summary_from(&node).unwrap().milestone, None);
     }
 }
 

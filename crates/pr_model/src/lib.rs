@@ -222,6 +222,9 @@ pub struct PullRequest {
     pub comments: u32,
     pub updated_at: Timestamp,
     pub labels: Vec<String>,
+    /// The title of the GitHub milestone the pull request is assigned to.
+    #[serde(default)]
+    pub milestone: Option<String>,
     pub inboxes: Vec<Inbox>,
     pub agent_reviewed: bool,
     /// The start of the description, for triage in the list.
@@ -239,7 +242,7 @@ pub struct PullRequest {
 }
 
 impl PullRequest {
-    /// Builds an open pull request with no review, checks, comments or labels; set the
+    /// Builds an open pull request with no review, checks, comments, labels or milestone; set the
     /// remaining public fields directly.
     pub fn new(
         key: PullRequestKey,
@@ -261,6 +264,7 @@ impl PullRequest {
             comments: 0,
             updated_at,
             labels: Vec::new(),
+            milestone: None,
             inboxes: Vec::new(),
             agent_reviewed: false,
             body_excerpt: String::new(),

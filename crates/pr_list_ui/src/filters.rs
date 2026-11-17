@@ -213,6 +213,53 @@ pub fn visible<'a>(
     visible
 }
 
+/// One painted item of the list, in display order.
+#[derive(Clone, Copy, Debug)]
+pub enum ListEntry<'a> {
+    /// The header of a milestone's group: the milestone's title, or `None` for pull
+    /// requests without one, and how many pull requests follow it.
+    Milestone {
+        title: Option<&'a str>,
+        count: usize,
+    },
+    /// A pull request row.
+    PullRequest(&'a PullRequest),
+}
+
+impl<'a> ListEntry<'a> {
+    /// The pull request of a row; `None` for a header.
+    pub fn pull_request(self) -> Option<&'a PullRequest> {
+        match self {
+            Self::PullRequest(pull_request) => Some(pull_request),
+            Self::Milestone { .. } => None,
+        }
+    }
+}
+
+/// What the list paints for `rows`, which are already filtered and sorted. Grouped by
+/// milestone, each milestone's header precedes its pull requests: milestones in title
+/// order ignoring case, pull requests without one last, and `rows`' order kept inside
+/// each group. Milestones are matched by title, so the same title in two repositories
+/// is one group.
+pub fn entries<'a>(rows: Vec<&'a PullRequest>, group_by_milestone: bool) -> Vec<ListEntry<'a>> {
+    if !group_by_milestone {
+        return rows.into_iter().map(ListEntry::PullRequest).collect();
+    }
+    let mut titles: Vec<Option<&str>> = rows.iter().map(|pr| pr.milestone.as_deref()).collect();
+    titles.sort_by_key(|title| (title.is_none(), title.map(str::to_lowercase), *title));
+    titles.dedup();
+    let mut entries = Vec::with_capacity(rows.len() + titles.len());
+    for title in titles {
+        let members = rows.iter().filter(|pr| pr.milestone.as_deref() == title);
+        entries.push(ListEntry::Milestone {
+            title,
+            count: members.clone().count(),
+        });
+        entries.extend(members.map(|pr| ListEntry::PullRequest(pr)));
+    }
+    entries
+}
+
 /// Pull requests in `scope` under `tab`, ignoring other filters; the tab's count.
 pub fn tab_count(
     pull_requests: &[PullRequest],
@@ -286,6 +333,101 @@ mod tests {
         let rows = visible(&prs, &Scope::Inbox(Inbox::AllOpen), &saved, &filters);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].key.number(), 477);
+    }
+
+    /// Each entry as text: `[title count]` for a header, the number for a row.
+    fn outline(entries: &[ListEntry]) -> Vec<String> {
+        entries
+            .iter()
+            .map(|entry| match entry {
+                ListEntry::Milestone { title, count } => {
+                    format!("[{} {count}]", title.unwrap_or("none"))
+                }
+                ListEntry::PullRequest(pr) => pr.key.number().to_string(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn milestones_group_rows_in_title_order_with_none_last() {
+        let (prs, saved) = data();
+        let rows = visible(
+            &prs,
+            &Scope::Inbox(Inbox::ReviewRequested),
+            &saved,
+            &ListFilters::default(),
+        );
+        assert_eq!(
+            outline(&entries(rows, true)),
+            [
+                "[v0.9 3]", "482", "479", "477", "[v1.0 3]", "121", "475", "470", "[none 2]",
+                "118", "42"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_sort_orders_rows_inside_each_milestone() {
+        let (prs, saved) = data();
+        let filters = ListFilters {
+            sort: SortOrder::LeastRecentlyUpdated,
+            ..ListFilters::default()
+        };
+        let rows = visible(
+            &prs,
+            &Scope::Inbox(Inbox::ReviewRequested),
+            &saved,
+            &filters,
+        );
+        assert_eq!(
+            outline(&entries(rows, true)),
+            [
+                "[v0.9 3]", "477", "479", "482", "[v1.0 3]", "470", "475", "121", "[none 2]", "42",
+                "118"
+            ]
+        );
+    }
+
+    #[test]
+    fn milestone_titles_order_ignoring_case() {
+        let now = Timestamp::from_unix(2_000_000_000);
+        let with = |number, milestone: Option<&str>| {
+            let mut pr = PullRequest::new(
+                pr_model::PullRequestKey::new(RepoSlug::new("o", "r"), number),
+                "T",
+                "a",
+                "h",
+                "main",
+                now,
+            );
+            pr.milestone = milestone.map(str::to_string);
+            pr
+        };
+        let prs = [
+            with(1, None),
+            with(2, Some("beta")),
+            with(3, Some("Alpha")),
+            with(4, Some("beta")),
+        ];
+        assert_eq!(
+            outline(&entries(prs.iter().collect(), true)),
+            ["[Alpha 1]", "3", "[beta 2]", "2", "4", "[none 1]", "1"]
+        );
+    }
+
+    #[test]
+    fn ungrouped_entries_are_the_rows() {
+        let (prs, saved) = data();
+        let rows = visible(
+            &prs,
+            &Scope::Inbox(Inbox::ReviewRequested),
+            &saved,
+            &ListFilters::default(),
+        );
+        assert_eq!(
+            outline(&entries(rows, false)),
+            ["482", "479", "121", "477", "118", "475", "42", "470"]
+        );
     }
 
     #[test]

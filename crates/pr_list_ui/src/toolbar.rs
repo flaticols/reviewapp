@@ -1,6 +1,6 @@
 //! The pull request list's controls, placed in the title bar: the scope's name and
 //! open count on the left; filter text, the Filter and Sort menus and Refresh on the
-//! right. Filters beyond the state stay visible as removable chips above the list.
+//! right. The Sort menu also groups the list by milestone. Filters beyond the state stay visible as removable chips above the list.
 
 use app_state_ui::StoresExt as _;
 use app_state_ui::actions::Refresh;
@@ -301,14 +301,20 @@ impl RenderOnce for ListActions {
 
         let sort_list = self.list.clone();
         let current_sort = filters.sort;
+        let grouped = cx
+            .stores()
+            .settings()
+            .read(cx)
+            .preferences()
+            .group_pull_requests_by_milestone;
         let sort = Button::new("list-sort")
             .ghost()
             .small()
             .dropdown_caret(true)
             .label(current_sort.label())
-            .tooltip("Order of the list")
+            .tooltip("Order and grouping of the list")
             .dropdown_menu_with_anchor(gpui_kit::Anchor::TopRight, move |menu: PopupMenu, _, _| {
-                SortOrder::ALL.iter().fold(menu, |menu, order| {
+                let menu = SortOrder::ALL.iter().fold(menu, |menu, order| {
                     let list = sort_list.clone();
                     let order = *order;
                     menu.item(
@@ -316,7 +322,18 @@ impl RenderOnce for ListActions {
                             .checked(order == current_sort)
                             .on_click(move |_, _, cx| update(&list, cx, |f| f.sort = order)),
                     )
-                })
+                });
+                menu.separator().item(
+                    PopupMenuItem::new("Group by milestone")
+                        .checked(grouped)
+                        .on_click(move |_, _, cx| {
+                            cx.stores().settings().clone().update(cx, |settings, cx| {
+                                settings.update_preferences(cx, |p| {
+                                    p.group_pull_requests_by_milestone = !grouped
+                                })
+                            })
+                        }),
+                )
             });
 
         h_flex()

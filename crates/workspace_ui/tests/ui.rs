@@ -2060,3 +2060,181 @@ fn the_row_menu_checks_a_pull_request_out_in_a_new_worktree(cx: &mut TestAppCont
     assert_eq!(git(&clone, &["rev-parse", "--abbrev-ref", "HEAD"]), "main");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[gpui_kit::test]
+fn the_sort_menu_groups_the_list_by_milestone(cx: &mut TestAppContext) {
+    use app_state_ui::StoresExt as _;
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            !on_screen(window, "milestone:v0.9"),
+            "the list starts ungrouped"
+        );
+        window.click("list-sort", cx);
+    })
+    .unwrap();
+    // Recently updated, Least recently updated, Most commented, a separator, Group by milestone.
+    pick_menu_item(window, 4, cx);
+    assert!(
+        cx.update(|cx| {
+            cx.stores()
+                .settings()
+                .read(cx)
+                .preferences()
+                .group_pull_requests_by_milestone
+        }),
+        "the menu item turns the preference on"
+    );
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            on_screen(window, "milestone:v0.9"),
+            "a milestone header is painted above its pull requests"
+        );
+        assert_eq!(window.find("milestone:v0.9").label(), Some("v0.9"));
+        assert_eq!(window.find("milestone:v1.0").label(), Some("v1.0"));
+        assert_eq!(window.find("no-milestone").label(), Some("No milestone"));
+        let top = |id: &'static str| window.find(id).bounds().top();
+        let painted = [
+            "milestone:v0.9",
+            "flaticols/switchfold#482",
+            "flaticols/switchfold#477",
+            "milestone:v1.0",
+            "flaticols/gathering-app#121",
+            "flaticols/switchfold#470",
+            "no-milestone",
+            "flaticols/gathering-app#118",
+        ];
+        for pair in painted.windows(2) {
+            assert!(
+                top(pair[0]) < top(pair[1]),
+                "{} is painted above {}",
+                pair[0],
+                pair[1]
+            );
+        }
+        assert_eq!(
+            top("flaticols/gathering-app#121") - top("milestone:v1.0"),
+            window.rem_size() * 2.375,
+            "a row starts right under its milestone header"
+        );
+    })
+    .unwrap();
+
+    // v1.0's first row is the fourth pull request on screen; ungrouped, #477 is.
+    cx.update_window(window, |_, window, cx| {
+        for _ in 0..4 {
+            window.press("down", cx);
+        }
+        window.press("enter", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|cx| workspace.read(cx).reviewing(cx)),
+        Some(PullRequestKey::new(
+            RepoSlug::new("flaticols", "gathering-app"),
+            121
+        )),
+        "the keyboard walks the rows in the grouped order"
+    );
+
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.press("escape", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("list-sort", cx);
+    })
+    .unwrap();
+    pick_menu_item(window, 4, cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            !on_screen(window, "milestone:v0.9"),
+            "picking the item again removes the headers"
+        );
+        assert!(
+            window.find("flaticols/gathering-app#121").bounds().top()
+                < window.find("flaticols/switchfold#477").bounds().top(),
+            "the rows return to the sort's order"
+        );
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn the_keyboard_keeps_its_row_on_screen_in_a_long_list(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    // Opens the selected row to learn which it is, returns, and checks the list still
+    // shows it whole.
+    let assert_selection_shows = |cx: &mut TestAppContext, message: &str| {
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.press("enter", cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        let selected = cx
+            .update(|cx| workspace.read(cx).reviewing(cx))
+            .expect("the selected row opens");
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.press("escape", cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            let list = window.find("pull-request-rows").bounds();
+            let row = window
+                .try_find(selected.id())
+                .unwrap_or_else(|| panic!("{message}: {selected:?} is not painted"))
+                .bounds();
+            assert!(
+                row.top() >= list.top() && row.bottom() <= list.bottom(),
+                "{message}: {selected:?} at {row:?} is outside the list at {list:?}"
+            );
+        })
+        .unwrap();
+        selected
+    };
+
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        // Sidebar rows are named section-row; All open is the fifth inbox.
+        window.click("0-4", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        for _ in 0..25 {
+            window.press("down", cx);
+        }
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let ungrouped = assert_selection_shows(cx, "the list scrolls to the selected row");
+
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("list-sort", cx);
+    })
+    .unwrap();
+    pick_menu_item(window, 4, cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        for _ in 0..6 {
+            window.press("down", cx);
+        }
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let grouped = assert_selection_shows(cx, "the grouped list scrolls to the selected row");
+    assert_ne!(ungrouped, grouped, "the selection moved on");
+}

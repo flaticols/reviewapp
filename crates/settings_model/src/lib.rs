@@ -430,6 +430,8 @@ pub struct Preferences {
     pub outline_collapsed: bool,
     /// Lists repositories in the sidebar under their organization or owner.
     pub group_repositories_by_owner: bool,
+    /// Lists pull requests under the GitHub milestone they are assigned to.
+    pub group_pull_requests_by_milestone: bool,
 }
 
 /// A color the reviewer gives a repository, to tell it apart in the sidebar and the
@@ -582,6 +584,7 @@ impl Default for Preferences {
             repository_colors: Vec::new(),
             folded_sections: Vec::new(),
             group_repositories_by_owner: false,
+            group_pull_requests_by_milestone: false,
             inspector_collapsed: false,
             outline_collapsed: false,
         }

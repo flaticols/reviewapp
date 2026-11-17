@@ -31,6 +31,8 @@ enum Scene {
     RowMenu,
     /// The list's Filter menu, open from the title bar.
     FilterMenu,
+    /// The list grouped by milestone.
+    ByMilestone,
     /// A pinned repository's context menu, with the color grid.
     RepoMenu,
     /// A file header's context menu.
@@ -86,11 +88,12 @@ enum Scene {
 }
 
 impl Scene {
-    const ALL: [Scene; 38] = [
+    const ALL: [Scene; 39] = [
         Self::List,
         Self::OneCommit,
         Self::RowMenu,
         Self::FilterMenu,
+        Self::ByMilestone,
         Self::RepoMenu,
         Self::FileMenu,
         Self::RequestReview,
@@ -135,6 +138,7 @@ impl Scene {
             Self::MergePopover => "03e-merge-popover",
             Self::RowMenu => "01c-row-menu",
             Self::FilterMenu => "01d-filter-menu",
+            Self::ByMilestone => "01f-by-milestone",
             Self::RepoMenu => "01e-repo-menu",
             Self::FileMenu => "02h-file-menu",
             Self::OneCommit => "02i-one-commit",
@@ -260,8 +264,9 @@ fn render(
         look.appearance = appearance;
         if matches!(
             scene,
-            Scene::List | Scene::RowMenu | Scene::FilterMenu | Scene::RepoMenu
+            Scene::List | Scene::RowMenu | Scene::FilterMenu | Scene::ByMilestone | Scene::RepoMenu
         ) {
+            look.group_pull_requests_by_milestone = scene == Scene::ByMilestone;
             look.set_pinned("flaticols/switchfold", true);
             look.set_repository_color(
                 "flaticols/switchfold",
