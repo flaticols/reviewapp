@@ -62,7 +62,10 @@ pub fn pull_request_menu(
     menu: PopupMenu,
     target: &PullRequestTarget,
     review_with_agent: Option<Handler>,
+    cx: &App,
 ) -> PopupMenu {
+    let queued = cx.stores().merge_queue().read(cx).contains(&target.key, cx);
+    let queue_key = target.key.clone();
     let url = target.url();
     let zed_key = target.key.clone();
     let checkout_key = target.key.clone();
@@ -148,6 +151,31 @@ pub fn pull_request_menu(
             }))
             .on_click(move |_, window, cx| confirm_set_open(&state_target, open, window, cx)),
         )
+    };
+    let can_queue = matches!(
+        target.state,
+        PullRequestState::Open | PullRequestState::Draft
+    );
+    let menu = if queued {
+        menu.item(
+            PopupMenuItem::new("Remove from merge queue")
+                .icon(Icon::new(IconName::GitMerge))
+                .on_click(move |_, _, cx| {
+                    let queue = cx.stores().merge_queue().clone();
+                    queue.update(cx, |queue, cx| queue.remove(&queue_key, cx))
+                }),
+        )
+    } else if can_queue {
+        menu.item(
+            PopupMenuItem::new("Add to merge queue")
+                .icon(Icon::new(IconName::GitMerge))
+                .on_click(move |_, _, cx| {
+                    let queue = cx.stores().merge_queue().clone();
+                    queue.update(cx, |queue, cx| queue.add(queue_key.clone(), cx))
+                }),
+        )
+    } else {
+        menu
     };
     menu.separator()
         .item(

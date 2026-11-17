@@ -1588,6 +1588,65 @@ fn list_filters_show_as_chips_that_clear_them(cx: &mut TestAppContext) {
     assert!(gone);
 }
 
+/// Right-clicks `row` and returns the painted label of each item in its menu, by index.
+fn row_menu_labels(
+    window: AnyWindowHandle,
+    row: &'static str,
+    cx: &mut TestAppContext,
+) -> Vec<Option<String>> {
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.right_click(row, cx);
+    })
+    .unwrap();
+    settle(window, "popup-menu", cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let menu = window.within("popup-menu");
+        (0..40usize)
+            .map(|ix| menu.try_find(ix).and_then(|item| item.label().map(str::to_string)))
+            .collect()
+    })
+    .unwrap()
+}
+
+fn menu_index(labels: &[Option<String>], label: &str) -> Option<usize> {
+    labels.iter().position(|item| item.as_deref() == Some(label))
+}
+
+fn merge_queue(cx: &mut TestAppContext) -> Vec<String> {
+    use app_state_ui::StoresExt as _;
+    cx.update(|cx| {
+        cx.stores()
+            .settings()
+            .read(cx)
+            .preferences()
+            .merge_queue
+            .clone()
+    })
+}
+
+#[gpui_kit::test]
+fn merge_queue_menu_adds_and_removes(cx: &mut TestAppContext) {
+    let (window, _) = open(cx);
+    let row = "flaticols/switchfold#482";
+    let labels = row_menu_labels(window, row, cx);
+    let add = menu_index(&labels, "Add to merge queue").expect("the menu offers to queue it");
+    pick_menu_item(window, add, cx);
+    assert_eq!(merge_queue(cx), [featured().id()]);
+
+    let labels = row_menu_labels(window, row, cx);
+    assert_eq!(
+        menu_index(&labels, "Add to merge queue"),
+        None,
+        "a queued pull request isn't offered to be queued again"
+    );
+    let remove =
+        menu_index(&labels, "Remove from merge queue").expect("a queued pull request offers removal");
+    pick_menu_item(window, remove, cx);
+    assert!(merge_queue(cx).is_empty());
+}
+
 #[gpui_kit::test]
 fn pinned_repositories_get_a_section_that_folds(cx: &mut TestAppContext) {
     use app_state_ui::StoresExt as _;

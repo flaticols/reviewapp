@@ -606,7 +606,7 @@ impl PullRequestList {
                     .h(rems(ROW_REMS))
                     .px_2()
                     .pt_0p5()
-                    .context_menu(move |menu, _, _| {
+                    .context_menu(move |menu, _, cx| {
                         let agent_view = agent_view.clone();
                         let agent_key = target.key.clone();
                         pr_actions_ui::pull_request_menu(
@@ -619,6 +619,7 @@ impl PullRequestList {
                                     ))
                                 })
                             })),
+                            cx,
                         )
                     })
                     .child(

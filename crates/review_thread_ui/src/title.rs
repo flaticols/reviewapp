@@ -222,7 +222,7 @@ impl RenderOnce for PullRequestTitle {
                                     .small()
                                     .icon(IconName::Ellipsis)
                                     .accessibility_label("More pull request actions")
-                                    .dropdown_menu(move |menu: PopupMenu, _, _| {
+                                    .dropdown_menu(move |menu: PopupMenu, _, cx| {
                                         let agent_view = agent_view.clone();
                                         pr_actions_ui::pull_request_menu(
                                             menu,
@@ -232,6 +232,7 @@ impl RenderOnce for PullRequestTitle {
                                                     this.open_agent_review(window, cx)
                                                 })
                                             })),
+                                            cx,
                                         )
                                     })
                             }),
