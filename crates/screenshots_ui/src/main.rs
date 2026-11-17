@@ -338,6 +338,14 @@ fn render(
                     ] {
                         p.set_queued(id, true);
                     }
+                    p.set_repository_color(
+                        "flaticols/switchfold",
+                        Some(settings_model::RepositoryColor::Blue),
+                    );
+                    p.set_repository_color(
+                        "flaticols/gathering-app",
+                        Some(settings_model::RepositoryColor::Green),
+                    );
                 })
             });
             cx.stores()

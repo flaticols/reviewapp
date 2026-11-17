@@ -1033,6 +1033,7 @@ fn merge_queue_menu(
     cx: &App,
 ) -> Option<SidebarMenu> {
     let queue = cx.stores().merge_queue().read(cx);
+    let preferences = cx.stores().settings().read(cx).preferences();
     let mut repositories: Vec<(RepoSlug, Vec<PullRequestKey>)> = Vec::new();
     for key in queue.queue(cx) {
         match repositories.iter_mut().find(|(repo, _)| repo == key.repo()) {
@@ -1045,9 +1046,15 @@ fn merge_queue_menu(
     }
     Some(
         SidebarMenu::new().children(repositories.into_iter().map(|(repo, keys)| {
+            let color = preferences
+                .repository_color(&repo.to_string())
+                .map(|color| theme_ui::repository_color(color, cx));
             SidebarMenuItem::new(repo.name().clone())
                 .label_style(label_style())
-                .icon(Icon::new(IconName::FolderGit2))
+                .icon(match color {
+                    Some(color) => Icon::new(IconName::FolderGit2).text_color(color),
+                    None => Icon::new(IconName::FolderGit2),
+                })
                 .default_open(true)
                 .click_to_toggle(true)
                 .children(keys.into_iter().map(|key| {
