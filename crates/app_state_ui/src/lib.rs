@@ -1,13 +1,17 @@
 //! State shared by Switchfold's screens: the pull request store, the settings store,
-//! and the commands key bindings dispatch. Screens read the stores through
-//! [`StoresExt::stores`] and observe them for changes.
+//! the merge queue, and the commands key bindings dispatch. Screens read the stores
+//! through [`StoresExt::stores`] and observe them for changes.
 
 pub mod actions;
+mod merge_plan;
+mod merge_queue;
 mod pull_request_store;
 mod settings_store;
 
 use gpui_kit::{App, Entity, Global};
 
+pub use merge_plan::{Activity, RowState, Skip};
+pub use merge_queue::{MergeQueue, MergeQueueEvent};
 pub use pull_request_store::{DetailState, ListState, PullRequestStore, PullRequestStoreEvent};
 pub use settings_store::{SettingsStore, SettingsStoreEvent};
 
@@ -15,6 +19,7 @@ pub use settings_store::{SettingsStore, SettingsStoreEvent};
 pub struct Stores {
     pull_requests: Entity<PullRequestStore>,
     settings: Entity<SettingsStore>,
+    merge_queue: Entity<MergeQueue>,
 }
 
 impl Global for Stores {}
@@ -24,12 +29,19 @@ impl Stores {
     pub fn install(
         pull_requests: Entity<PullRequestStore>,
         settings: Entity<SettingsStore>,
+        merge_queue: Entity<MergeQueue>,
         cx: &mut App,
     ) {
         cx.set_global(Self {
             pull_requests,
             settings,
+            merge_queue,
         });
+    }
+
+    /// The viewer's merge queue and where each pull request in it stands.
+    pub fn merge_queue(&self) -> &Entity<MergeQueue> {
+        &self.merge_queue
     }
 
     /// Pull requests, their details and the viewer's pending review.

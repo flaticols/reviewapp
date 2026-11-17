@@ -1,10 +1,14 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use pr_model::CheckStatus;
 use pr_model::{PullRequest, PullRequestKey, RepoSlug};
-use review_model::{Actor, CheckRun, LogLine, MergeMethod, PullRequestDetail, ReviewVerdict};
+use review_model::{
+    Actor, CheckRun, LogLine, MergeMethod, MergeStatus, PullRequestDetail, ReviewVerdict,
+};
 
 /// A failed GitHub request, with a message suitable for the interface.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -140,6 +144,10 @@ pub trait PullRequestSource: Send + Sync {
     /// or rebasing onto it, as long as its head is still `head_sha`.
     fn update_branch(&self, node_id: &str, head_sha: &str, rebase: bool) -> Result<(), ApiError>;
 
+    /// Where each of `keys` stands for the merge queue, in one request. Pull requests
+    /// GitHub doesn't return are left out.
+    fn merge_statuses(&self, keys: &[PullRequestKey]) -> Result<Vec<MergeStatus>, ApiError>;
+
     /// Asks `logins` to review the pull request.
     fn request_reviewers(&self, key: &PullRequestKey, logins: &[String]) -> Result<(), ApiError>;
 
@@ -171,6 +179,10 @@ pub struct FixtureSource {
     progressions: Mutex<Vec<CheckProgression>>,
     /// Closes, reopens and review requests, as `close #482`, `request #482 tanya`.
     actions: Mutex<Vec<String>>,
+    /// Merge statuses served in place of the ones built from the details.
+    merge_statuses: Mutex<HashMap<PullRequestKey, MergeStatus>>,
+    /// Makes [`PullRequestSource::merge_statuses`] fail, as when GitHub is unreachable.
+    fail_merge_statuses: AtomicBool,
 }
 
 impl FixtureSource {
@@ -185,7 +197,33 @@ impl FixtureSource {
             submitted: Mutex::new(Vec::new()),
             progressions: Mutex::new(Vec::new()),
             actions: Mutex::new(Vec::new()),
+            merge_statuses: Mutex::new(HashMap::new()),
+            fail_merge_statuses: AtomicBool::new(false),
         }
+    }
+
+    /// Makes merge status requests fail while `fail` is set.
+    pub fn fail_merge_statuses(&self, fail: bool) {
+        self.fail_merge_statuses.store(fail, Ordering::Relaxed);
+    }
+
+    /// Serves `status` for its pull request from now on.
+    pub fn set_merge_status(&self, status: MergeStatus) {
+        if let Ok(mut statuses) = self.merge_statuses.lock() {
+            statuses.insert(status.key.clone(), status);
+        }
+    }
+
+    /// The merge status the sample implies: its merge facts, state and CI.
+    fn sample_merge_status(&self, key: &PullRequestKey) -> Option<MergeStatus> {
+        let detail = self.details.get(key)?;
+        let mut status = MergeStatus::new(key.clone(), detail.summary.state, detail.merge.clone()?);
+        status.required_checks = match detail.summary.ci {
+            Some(CheckStatus::Failed) => CheckStatus::Failed,
+            Some(CheckStatus::Running | CheckStatus::Queued) => CheckStatus::Running,
+            _ => CheckStatus::Passed,
+        };
+        Some(status)
     }
 
     /// Serves `finished` in place of the check with the same id once `after` has passed
@@ -323,6 +361,25 @@ impl PullRequestSource for FixtureSource {
             "update-branch {node_id} {}",
             if rebase { "rebase" } else { "merge" }
         ))
+    }
+
+    fn merge_statuses(&self, keys: &[PullRequestKey]) -> Result<Vec<MergeStatus>, ApiError> {
+        if self.fail_merge_statuses.load(Ordering::Relaxed) {
+            return Err(ApiError::new("GitHub couldn’t be reached."));
+        }
+        let scripted = self
+            .merge_statuses
+            .lock()
+            .map_err(|_| ApiError::new("Couldn’t read merge statuses."))?;
+        Ok(keys
+            .iter()
+            .filter_map(|key| {
+                scripted
+                    .get(key)
+                    .cloned()
+                    .or_else(|| self.sample_merge_status(key))
+            })
+            .collect())
     }
 
     fn set_open(&self, key: &PullRequestKey, open: bool) -> Result<(), ApiError> {

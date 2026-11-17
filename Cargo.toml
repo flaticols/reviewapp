@@ -116,5 +116,9 @@ all = { level = "warn", priority = -1 }
 [profile.dev]
 debug = "line-tables-only"
 
+# Rebuilding the .app after a change recompiles only what changed.
+[profile.release]
+incremental = true
+
 [profile.dev.package."*"]
 opt-level = 2

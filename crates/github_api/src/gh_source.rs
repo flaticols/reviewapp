@@ -11,8 +11,8 @@ use pr_model::{
 };
 use review_model::{
     Actor, AutoMerge, CheckRun, CheckStep, Comment, Commit, Dependency, LogLine, LogLineKind,
-    MergeInfo, MergeMethod, MergeState, PullRequestDetail, ReviewThread, ReviewVerdict, Reviewer,
-    ReviewerState, Stack, StackEntry, TimelineItem,
+    MergeInfo, MergeMethod, MergeState, MergeStatus, PullRequestDetail, ReviewThread,
+    ReviewVerdict, Reviewer, ReviewerState, Stack, StackEntry, TimelineItem,
 };
 use serde_json::{Value, json};
 
@@ -297,6 +297,103 @@ fn merge_info(repository: &Value, node: &Value) -> Option<MergeInfo> {
     info.deletes_branch = repository["deleteBranchOnMerge"].as_bool().unwrap_or(false);
     info.from_fork = node["isCrossRepository"].as_bool().unwrap_or(false);
     Some(info)
+}
+
+/// The REST merge request. Without a title GitHub writes its own title and message.
+fn merge_body(method: MergeMethod, title: &str, message: &str, head_sha: &str) -> Value {
+    let mut body = json!({ "merge_method": method.api_name(), "sha": head_sha });
+    if method.has_message() && !title.is_empty() {
+        body["commit_title"] = json!(title);
+        body["commit_message"] = json!(message);
+    }
+    body
+}
+
+/// The merge status query for `keys`: one `pN` alias each, with owners, names and
+/// numbers passed as variables.
+fn merge_status_query(keys: &[PullRequestKey]) -> (String, Value) {
+    let mut params = Vec::new();
+    let mut aliases = String::new();
+    let mut variables = serde_json::Map::new();
+    for (ix, key) in keys.iter().enumerate() {
+        params.push(format!("$o{ix}: String!, $n{ix}: String!, $p{ix}: Int!"));
+        variables.insert(format!("o{ix}"), json!(key.repo().owner()));
+        variables.insert(format!("n{ix}"), json!(key.repo().name()));
+        variables.insert(format!("p{ix}"), json!(key.number()));
+        // ponytail: the first 100 check contexts only; page them if a repository has more.
+        aliases.push_str(&format!(
+            r#"
+  p{ix}: repository(owner: $o{ix}, name: $n{ix}) {{
+    mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed deleteBranchOnMerge viewerDefaultMergeMethod
+    pullRequest(number: $p{ix}) {{
+      id state isDraft headRefOid mergeStateStatus reviewDecision
+      viewerCanEnableAutoMerge viewerCanDisableAutoMerge viewerCanUpdateBranch isCrossRepository
+      autoMergeRequest {{ mergeMethod enabledBy {{ login }} }}
+      commits(last: 1) {{ nodes {{ commit {{ statusCheckRollup {{ contexts(first: 100) {{ nodes {{
+        __typename
+        ... on CheckRun {{ status conclusion isRequired(pullRequestNumber: $p{ix}) }}
+        ... on StatusContext {{ state isRequired(pullRequestNumber: $p{ix}) }}
+      }} }} }} }} }} }}
+    }}
+  }}"#
+        ));
+    }
+    let query = format!("query({}) {{{aliases}\n}}", params.join(", "));
+    (query, Value::Object(variables))
+}
+
+/// The merge statuses in a merge status query's `data`, in `keys` order, leaving out
+/// pull requests GitHub didn't return.
+fn parse_merge_statuses(keys: &[PullRequestKey], data: &Value) -> Vec<MergeStatus> {
+    keys.iter()
+        .enumerate()
+        .filter_map(|(ix, key)| {
+            let repository = &data[format!("p{ix}")];
+            let node = &repository["pullRequest"];
+            let mut status =
+                MergeStatus::new(key.clone(), state_from(node), merge_info(repository, node)?);
+            status.required_checks = required_checks(
+                &node["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["nodes"],
+            );
+            status.needs_review = matches!(
+                node["reviewDecision"].as_str(),
+                Some("REVIEW_REQUIRED" | "CHANGES_REQUESTED")
+            );
+            Some(status)
+        })
+        .collect()
+}
+
+/// Failed when a required check failed, Running when one hasn't finished, Passed
+/// otherwise. Optional checks don't count.
+fn required_checks(contexts: &Value) -> CheckStatus {
+    let required: Vec<&Value> = contexts
+        .as_array()
+        .map(|nodes| {
+            nodes
+                .iter()
+                .filter(|context| context["isRequired"].as_bool() == Some(true))
+                .collect()
+        })
+        .unwrap_or_default();
+    let failed = |context: &&Value| match context["__typename"].as_str() {
+        Some("StatusContext") => matches!(context["state"].as_str(), Some("FAILURE" | "ERROR")),
+        _ => matches!(
+            context["conclusion"].as_str(),
+            Some("FAILURE" | "TIMED_OUT" | "CANCELLED" | "ACTION_REQUIRED" | "STARTUP_FAILURE")
+        ),
+    };
+    let running = |context: &&Value| match context["__typename"].as_str() {
+        Some("StatusContext") => matches!(context["state"].as_str(), Some("PENDING" | "EXPECTED")),
+        _ => context["status"].as_str() != Some("COMPLETED"),
+    };
+    if required.iter().any(failed) {
+        CheckStatus::Failed
+    } else if required.iter().any(running) {
+        CheckStatus::Running
+    } else {
+        CheckStatus::Passed
+    }
 }
 
 /// How much of a description the list keeps, enough for triage to judge by.
@@ -1028,18 +1125,13 @@ impl PullRequestSource for GhSource {
         message: &str,
         head_sha: &str,
     ) -> Result<(), ApiError> {
-        let mut body = json!({ "merge_method": method.api_name(), "sha": head_sha });
-        if method.has_message() {
-            body["commit_title"] = json!(title);
-            body["commit_message"] = json!(message);
-        }
         self.api(
             &[
                 "--method",
                 "PUT",
                 &format!("repos/{}/pulls/{}/merge", key.repo(), key.number()),
             ],
-            Some(&body),
+            Some(&merge_body(method, title, message, head_sha)),
         )?;
         Ok(())
     }
@@ -1064,6 +1156,17 @@ impl PullRequestSource for GhSource {
             json!({ "id": node_id, "head": head_sha, "method": if rebase { "REBASE" } else { "MERGE" } }),
         )?;
         Ok(())
+    }
+
+    fn merge_statuses(&self, keys: &[PullRequestKey]) -> Result<Vec<MergeStatus>, ApiError> {
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let (query, variables) = merge_status_query(keys);
+        Ok(parse_merge_statuses(
+            keys,
+            &self.graphql(&query, variables)?,
+        ))
     }
 
     fn set_open(&self, key: &PullRequestKey, open: bool) -> Result<(), ApiError> {
@@ -1262,6 +1365,124 @@ mod tests {
             "milestone": null
         });
         assert_eq!(summary_from(&node).unwrap().milestone, None);
+    }
+
+    fn queued(number: u64) -> PullRequestKey {
+        PullRequestKey::new(RepoSlug::new("acme", "app"), number)
+    }
+
+    /// One `pN` alias of the merge status query, with `contexts` as its head's checks.
+    fn alias(state: &str, review: &str, contexts: Value) -> Value {
+        json!({
+            "squashMergeAllowed": true, "viewerDefaultMergeMethod": "SQUASH",
+            "pullRequest": {
+                "id": "N1", "state": state, "isDraft": false, "headRefOid": "h1",
+                "mergeStateStatus": "BLOCKED", "reviewDecision": review,
+                "viewerCanUpdateBranch": true,
+                "commits": { "nodes": [{ "commit": { "statusCheckRollup": {
+                    "contexts": { "nodes": contexts }
+                } } }] }
+            }
+        })
+    }
+
+    fn check(conclusion: Option<&str>, required: bool) -> Value {
+        json!({
+            "__typename": "CheckRun",
+            "status": if conclusion.is_some() { "COMPLETED" } else { "IN_PROGRESS" },
+            "conclusion": conclusion, "isRequired": required
+        })
+    }
+
+    fn statuses(alias: Value) -> Vec<review_model::MergeStatus> {
+        parse_merge_statuses(&[queued(1)], &json!({ "p0": alias }))
+    }
+
+    #[test]
+    fn failed_required_check_fails() {
+        let data = alias("OPEN", "APPROVED", json!([check(Some("FAILURE"), true)]));
+        assert_eq!(statuses(data)[0].required_checks, CheckStatus::Failed);
+    }
+
+    #[test]
+    fn failed_optional_check_is_ignored() {
+        let contexts = json!([check(Some("FAILURE"), false), check(Some("SUCCESS"), true)]);
+        let data = alias("OPEN", "APPROVED", contexts);
+        assert_eq!(statuses(data)[0].required_checks, CheckStatus::Passed);
+    }
+
+    #[test]
+    fn failed_required_status_context_fails() {
+        let contexts =
+            json!([{ "__typename": "StatusContext", "state": "ERROR", "isRequired": true }]);
+        let data = alias("OPEN", "APPROVED", contexts);
+        assert_eq!(statuses(data)[0].required_checks, CheckStatus::Failed);
+    }
+
+    #[test]
+    fn running_required_check_runs() {
+        let data = alias("OPEN", "APPROVED", json!([check(None, true)]));
+        assert_eq!(statuses(data)[0].required_checks, CheckStatus::Running);
+    }
+
+    #[test]
+    fn merged_state_is_read() {
+        let data = alias("MERGED", "APPROVED", json!([]));
+        assert_eq!(statuses(data)[0].state, PullRequestState::Merged);
+    }
+
+    #[test]
+    fn review_required_needs_review() {
+        let data = alias("OPEN", "REVIEW_REQUIRED", json!([]));
+        assert!(statuses(data)[0].needs_review);
+    }
+
+    #[test]
+    fn merge_info_comes_from_the_alias() {
+        let data = alias("OPEN", "APPROVED", json!([]));
+        let status = &statuses(data)[0];
+        assert_eq!(status.merge.head_sha, "h1");
+        assert_eq!(status.merge.state, MergeState::Blocked);
+        assert_eq!(status.merge.default_method, Some(MergeMethod::Squash));
+    }
+
+    #[test]
+    fn missing_alias_is_left_out() {
+        let data = json!({
+            "p0": alias("OPEN", "APPROVED", json!([])),
+            "p1": { "pullRequest": null }
+        });
+        let found = parse_merge_statuses(&[queued(1), queued(2)], &data);
+        assert_eq!(
+            found
+                .iter()
+                .map(|status| status.key.clone())
+                .collect::<Vec<_>>(),
+            [queued(1)]
+        );
+    }
+
+    #[test]
+    fn merge_without_a_title_keeps_githubs_default() {
+        assert_eq!(
+            merge_body(MergeMethod::Squash, "", "", "h1"),
+            json!({ "merge_method": "squash", "sha": "h1" })
+        );
+    }
+
+    #[test]
+    fn merge_with_a_title_sends_it() {
+        assert_eq!(
+            merge_body(MergeMethod::Squash, "T", "M", "h1"),
+            json!({ "merge_method": "squash", "sha": "h1", "commit_title": "T", "commit_message": "M" })
+        );
+    }
+
+    #[test]
+    fn query_keeps_names_out_of_the_text() {
+        let (query, variables) = merge_status_query(&[queued(7)]);
+        assert!(!query.contains("acme"));
+        assert_eq!(variables, json!({ "o0": "acme", "n0": "app", "p0": 7 }));
     }
 }
 

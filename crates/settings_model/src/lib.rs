@@ -437,6 +437,9 @@ pub struct Preferences {
     pub group_pull_requests_by_stack: bool,
     /// Wraps diff lines wider than their card. Off, a file's code scrolls sideways.
     pub wrap_diff_lines: bool,
+    /// Pull requests to merge one at a time per repository, as `owner/name#number`, in
+    /// merge order.
+    pub merge_queue: Vec<String>,
 }
 
 /// A color the reviewer gives a repository, to tell it apart in the sidebar and the
@@ -517,6 +520,40 @@ impl Preferences {
             self.folded_sections.push(name.to_string());
         }
     }
+
+    /// Whether the pull request `key` (`owner/name#number`) is in the merge queue.
+    pub fn is_queued(&self, key: &str) -> bool {
+        self.merge_queue.iter().any(|queued| queued == key)
+    }
+
+    /// Adds `key` to the end of the merge queue, or takes it out.
+    pub fn set_queued(&mut self, key: &str, queued: bool) {
+        if queued == self.is_queued(key) {
+            return;
+        }
+        self.merge_queue.retain(|existing| existing != key);
+        if queued {
+            self.merge_queue.push(key.to_string());
+        }
+    }
+
+    /// Swaps `key` with the nearest queued pull request of the same repository above it,
+    /// or below it when not `up`. Other repositories' entries stay where they are.
+    pub fn move_queued(&mut self, key: &str, up: bool) {
+        let repo = |entry: &str| entry.rsplit_once('#').map(|(repo, _)| repo.to_string());
+        let Some(ix) = self.merge_queue.iter().position(|entry| entry == key) else {
+            return;
+        };
+        let same_repo = |other: &usize| repo(&self.merge_queue[*other]) == repo(key);
+        let neighbour = if up {
+            (0..ix).rev().find(same_repo)
+        } else {
+            (ix + 1..self.merge_queue.len()).find(same_repo)
+        };
+        if let Some(other) = neighbour {
+            self.merge_queue.swap(ix, other);
+        }
+    }
 }
 
 /// Which triage features run, through which provider. Nothing runs until the
@@ -592,6 +629,7 @@ impl Default for Preferences {
             group_pull_requests_by_milestone: false,
             group_pull_requests_by_stack: false,
             wrap_diff_lines: false,
+            merge_queue: Vec::new(),
             inspector_collapsed: false,
             outline_collapsed: false,
         }
@@ -715,6 +753,56 @@ mod tests {
             agent.command_line(),
             "'/Users/me/My Agents/acp' --model 'big one'"
         );
+    }
+
+    #[test]
+    fn queuing_appends_once() {
+        let mut preferences = Preferences::default();
+        preferences.set_queued("a/x#1", true);
+        preferences.set_queued("a/x#2", true);
+        preferences.set_queued("a/x#1", true);
+        assert_eq!(preferences.merge_queue, ["a/x#1", "a/x#2"]);
+    }
+
+    fn queued(entries: &[&str]) -> Preferences {
+        Preferences {
+            merge_queue: entries.iter().map(|entry| entry.to_string()).collect(),
+            ..Preferences::default()
+        }
+    }
+
+    #[test]
+    fn unqueuing_removes() {
+        let mut preferences = queued(&["a/x#1", "a/x#2"]);
+        preferences.set_queued("a/x#1", false);
+        assert_eq!(preferences.merge_queue, ["a/x#2"]);
+    }
+
+    #[test]
+    fn moving_up_skips_other_repositories() {
+        let mut preferences = queued(&["a/x#1", "a/y#5", "a/x#2"]);
+        preferences.move_queued("a/x#2", true);
+        assert_eq!(preferences.merge_queue, ["a/x#2", "a/y#5", "a/x#1"]);
+    }
+
+    #[test]
+    fn moving_down_swaps_with_the_next_of_the_repository() {
+        let mut preferences = queued(&["a/x#1", "a/y#5", "a/x#2"]);
+        preferences.move_queued("a/x#1", false);
+        assert_eq!(preferences.merge_queue, ["a/x#2", "a/y#5", "a/x#1"]);
+    }
+
+    #[test]
+    fn moving_the_first_up_does_nothing() {
+        let mut preferences = queued(&["a/y#5", "a/x#1", "a/x#2"]);
+        preferences.move_queued("a/x#1", true);
+        assert_eq!(preferences.merge_queue, ["a/y#5", "a/x#1", "a/x#2"]);
+    }
+
+    #[test]
+    fn settings_without_a_queue_load_empty() {
+        let preferences: Preferences = serde_json::from_str("{}").unwrap();
+        assert!(preferences.merge_queue.is_empty());
     }
 
     #[test]
