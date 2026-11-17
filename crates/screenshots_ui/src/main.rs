@@ -82,6 +82,14 @@ enum Scene {
     Palette,
     /// Go to file with a fuzzy query typed.
     GoToFile,
+    /// A diff line wider than its card, with the file's code scrolled sideways.
+    LongLineScrolled,
+    /// The same line with Wrap long lines on.
+    LongLineWrapped,
+    /// The split layout, scrolled sideways.
+    LongLineSplit,
+    /// The split layout with Wrap long lines on.
+    LongLineSplitWrapped,
     AgentRun,
     /// The Reviews tab during the mock agent's run.
     ReviewsTab,
@@ -92,7 +100,7 @@ enum Scene {
 }
 
 impl Scene {
-    const ALL: [Scene; 41] = [
+    const ALL: [Scene; 45] = [
         Self::List,
         Self::OneCommit,
         Self::RowMenu,
@@ -130,6 +138,10 @@ impl Scene {
         Self::Keyboard,
         Self::Palette,
         Self::GoToFile,
+        Self::LongLineScrolled,
+        Self::LongLineWrapped,
+        Self::LongLineSplit,
+        Self::LongLineSplitWrapped,
         Self::AgentRun,
         Self::ReviewsTab,
         Self::AgentReply,
@@ -163,6 +175,10 @@ impl Scene {
             Self::InspectorHidden => "02o-inspector-hidden",
             Self::AskLines => "02p-ask-lines",
             Self::AskAnswer => "02q-ask-answer",
+            Self::LongLineScrolled => "02r-long-line-scrolled",
+            Self::LongLineWrapped => "02s-long-line-wrapped",
+            Self::LongLineSplit => "02t-long-line-split",
+            Self::LongLineSplitWrapped => "02u-long-line-split-wrapped",
             Self::Submit => "03-submit",
             Self::StartAgent => "05a-start-agent",
             Self::CheckLog => "04-check-log",
@@ -304,6 +320,12 @@ fn render(
                 settings.update_preferences(cx, |p| p.inspector_collapsed = true)
             });
         }
+        if matches!(scene, Scene::LongLineWrapped | Scene::LongLineSplitWrapped) {
+            use app_state_ui::StoresExt as _;
+            cx.stores().settings().clone().update(cx, |settings, cx| {
+                settings.update_preferences(cx, |p| p.wrap_diff_lines = true)
+            });
+        }
         if scene == Scene::ThreadEspresso {
             look.dark_theme = settings_model::DarkTheme::Espresso;
             look.light_theme = settings_model::LightTheme::IslandsLight;
@@ -372,6 +394,10 @@ fn render(
                 | Scene::ThreadFirstFile
                 | Scene::AskLines
                 | Scene::AskAnswer
+                | Scene::LongLineScrolled
+                | Scene::LongLineWrapped
+                | Scene::LongLineSplit
+                | Scene::LongLineSplitWrapped
                 | Scene::SplitPanes
                 | Scene::GoToFile
                 | Scene::FindInPane
@@ -478,6 +504,47 @@ fn render(
             window.render_frame(cx);
             // Sidebar rows are named section-row: section 1 is Pinned.
             window.right_click("1-0", cx);
+        }
+        Scene::LongLineScrolled
+        | Scene::LongLineWrapped
+        | Scene::LongLineSplit
+        | Scene::LongLineSplitWrapped => {
+            use gpui_kit::InputEvent as _;
+            use gpui_kit::test::TestWindowExt as _;
+            window.render_frame(cx);
+            let split = matches!(
+                scene,
+                Scene::LongLineSplit | Scene::LongLineSplitWrapped
+            );
+            if split {
+                window.click(("diff-mode", 1usize), cx);
+                window.render_frame(cx);
+            }
+            if scene == Scene::LongLineWrapped {
+                // A selection from inside the line above to the middle of the wrapped
+                // line's last row of text shows how a wrapped selection is painted.
+                let above = window.find("gutter-0-138").bounds();
+                let wrapped = window.find("gutter-0-139").bounds();
+                window.drag(
+                    gpui_kit::point(above.right() + px(140.), above.center().y),
+                    gpui_kit::point(wrapped.right() + px(260.), wrapped.bottom() - px(8.)),
+                    cx,
+                );
+            }
+            if matches!(scene, Scene::LongLineScrolled | Scene::LongLineSplit) {
+                let gutter = if split { "split-new-140" } else { "gutter-0-140" };
+                let gutter = window.find(gutter).bounds();
+                let position = gpui_kit::point(gutter.right() + px(24.), gutter.center().y);
+                window.dispatch_event(
+                    gpui_kit::ScrollWheelEvent {
+                        position,
+                        delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(-9000.), px(0.))),
+                        ..Default::default()
+                    }
+                    .to_platform_input(),
+                    cx,
+                );
+            }
         }
         Scene::FileMenu => {
             use gpui_kit::test::TestWindowExt as _;

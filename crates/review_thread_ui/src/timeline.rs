@@ -153,7 +153,17 @@ impl ReviewThreadView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let rem = window.rem_size();
-        if self.measured_rem.replace(rem).is_some_and(|old| old != rem) {
+        let wrap = cx
+            .stores()
+            .settings()
+            .read(cx)
+            .preferences()
+            .wrap_diff_lines;
+        let rewrapped = self
+            .measured_wrap
+            .replace(wrap)
+            .is_some_and(|old| old != wrap);
+        if self.measured_rem.replace(rem).is_some_and(|old| old != rem) || rewrapped {
             self.list_state.remeasure();
         }
         self.sync_rows(cx);
@@ -392,7 +402,9 @@ impl ReviewThreadView {
             DiffRow::Line { .. } | DiffRow::Split { .. } => self.highlights_for(path, cx),
             _ => Rc::default(),
         };
+        let long_lines = self.long_lines_for(path, window, cx);
         let mut element = FileDiffRow::new(file, highlights, row)
+            .long_lines(long_lines)
             .last(last)
             .collapsed(self.collapsed.contains(path))
             .viewed(detail.is_viewed(path))

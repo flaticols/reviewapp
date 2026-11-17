@@ -7,7 +7,7 @@ pub(crate) const THREAD_RS: &str = "\
          let blocks = push.files.iter().map(DiffBlock::from_file);
 -        self.blocks = blocks.collect();
 +        for block in blocks {
-+            let key = BlockKey::new(&block.path, block.hunk_hash());
++            let key = BlockKey::new(&block.path, block.hunk_hash()); // see https://github.com/flaticols/switchfold/blob/main/docs/design/thread-anchors.md#why-blocks-are-keyed-by-path-and-hunk-hash
 +            self.blocks.entry(key).or_insert(block);
 +        }
          self.reanchor_threads(cx);

@@ -23,14 +23,14 @@ use gpui_kit::component::{
     v_flex,
 };
 use gpui_kit::{
-    AnyElement, App, ClickEvent, ClipboardItem, ElementId, FontWeight, HighlightStyle, Hsla,
-    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, RenderOnce,
-    SharedString, StatefulInteractiveElement as _, Styled as _, TestSupportExt as _, Window, div,
-    prelude::FluentBuilder as _, rems,
+    AnyElement, App, ClickEvent, ClipboardItem, ElementId, Font, FontWeight, HighlightStyle, Hsla,
+    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Pixels, RenderOnce,
+    ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _, TestSupportExt as _,
+    TextRun, Window, div, prelude::FluentBuilder as _, rems,
 };
 use selectable_code::SelectableCode;
 use syntax_ui::FileHighlights;
-use theme_ui::{ActiveAppTheme as _, TypographyExt as _, code_line_height};
+use theme_ui::{ActiveAppTheme as _, TypographyExt as _, code_font_size, code_line_height};
 
 pub use layout::{SplitRow, split_rows};
 pub use selection::{LineGesture, LinePosition, LineRange};
@@ -41,6 +41,79 @@ pub enum DiffMode {
     #[default]
     Unified,
     Split,
+}
+
+/// What a row does with code wider than its card.
+#[derive(Clone, Debug, Default)]
+pub enum LongLines {
+    /// Cuts the line off at the card's edge.
+    #[default]
+    Clip,
+    /// Scrolls the code sideways, in step with the file's other rows. Line numbers and
+    /// hunk headers stay where they are.
+    Scroll(CodeScroll),
+    /// Breaks the line onto as many rows of text as it needs.
+    Wrap,
+}
+
+/// The sideways scroll position the rows of one file share, and how wide their code is.
+///
+/// Every row clamps the shared position against its own content, so all of them lay their
+/// code out [`CodeScroll::width`] wide: a narrower row would pull the others back.
+#[derive(Clone, Debug)]
+pub struct CodeScroll {
+    handle: ScrollHandle,
+    width: Pixels,
+}
+
+impl CodeScroll {
+    /// Scrolls with `handle`, which the owner keeps for as long as the file is shown.
+    /// `width` is the file's [`code_width`].
+    pub fn new(handle: ScrollHandle, width: Pixels) -> Self {
+        Self { handle, width }
+    }
+
+    /// The width every row of the file gives its code.
+    pub fn width(&self) -> Pixels {
+        self.width
+    }
+}
+
+/// How many of a file's longest lines [`code_width`] shapes. Characters stand in for
+/// width when ranking, which a proportional code font can get wrong for close calls.
+const SHAPED_CANDIDATES: usize = 4;
+
+/// The width of `file`'s widest line in the code font, for [`CodeScroll::new`]. It shapes
+/// text, so owners keep the result until the file, the code font or the rem size changes.
+pub fn code_width(file: &FileDiff, window: &Window, cx: &App) -> Pixels {
+    let lines = file.hunks.iter().flat_map(|hunk| &hunk.lines);
+    let mut longest: Vec<&str> = lines.map(|line| line.text.as_str()).collect();
+    longest.sort_by_key(|text| std::cmp::Reverse(expanded_columns(text)));
+    longest.truncate(SHAPED_CANDIDATES);
+    let style = window.text_style();
+    let font = Font {
+        family: cx.theme().mono_font_family.clone(),
+        ..style.font()
+    };
+    let size = code_font_size(window, cx);
+    longest
+        .into_iter()
+        .map(|text| {
+            let (text, _) = expand_tabs(text, &[]);
+            let run = TextRun {
+                len: text.len(),
+                font: font.clone(),
+                color: style.color,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            window
+                .text_system()
+                .shape_line(text.into(), size, &[run], None)
+                .width
+        })
+        .fold(Pixels::ZERO, Pixels::max)
 }
 
 /// Files with more changed lines than this start collapsed.
@@ -206,6 +279,7 @@ pub struct FileDiffRow {
     selected: Option<LineRange>,
     document_order: u64,
     find: Option<Find>,
+    long_lines: LongLines,
 }
 
 /// Text to mark in a row's code lines, and the match find is on, if it is in this row.
@@ -264,7 +338,15 @@ impl FileDiffRow {
             selected: None,
             document_order: 0,
             find: None,
+            long_lines: LongLines::default(),
         }
+    }
+
+    /// What the row does with code wider than its card. Rows clip unless told otherwise.
+    /// A hunk header never scrolls: it wraps when lines do and is cut off otherwise.
+    pub fn long_lines(mut self, long_lines: LongLines) -> Self {
+        self.long_lines = long_lines;
+        self
     }
 
     /// Marks `query` in the row's code; `current` is the hunk line and range of the
@@ -499,6 +581,7 @@ impl FileDiffRow {
                 DiffSide::Head => self.on_comment_line.clone(),
             },
             menu: self.line_menu.clone(),
+            long_lines: self.long_lines.clone(),
             document_order: DOCUMENT_ORDER_BASE
                 + self.document_order * 2
                 + u64::from(side == DiffSide::Head),
@@ -562,7 +645,15 @@ impl RenderOnce for FileDiffRow {
                 .text_color(cx.theme().muted_foreground)
                 .child("Binary file not shown.")
                 .into_any_element(),
-            DiffRow::Hunk(hunk) => hunk_header(&file.hunks[hunk].header(), cx).into_any_element(),
+            DiffRow::Hunk(hunk) => {
+                // A header says where the code below is, so it stays put while that
+                // code scrolls sideways.
+                let long_lines = match &self.long_lines {
+                    LongLines::Wrap => LongLines::Wrap,
+                    LongLines::Clip | LongLines::Scroll(_) => LongLines::Clip,
+                };
+                hunk_header(&file.hunks[hunk].header(), &long_lines, cx).into_any_element()
+            }
             DiffRow::Line { hunk, line } => unified_line(
                 &file.hunks[hunk].lines[line],
                 &self.spans(hunk, line, cx),
@@ -633,20 +724,60 @@ impl RenderOnce for FileDiffRow {
     }
 }
 
-fn hunk_header(header: &str, cx: &App) -> impl IntoElement {
+fn hunk_header(header: &str, long_lines: &LongLines, cx: &App) -> impl IntoElement {
+    let header = SharedString::from(header.to_string());
     h_flex()
         .min_h_6()
-        .h(code_line_height(cx))
+        .map(|this| match long_lines {
+            LongLines::Wrap => this.items_start(),
+            LongLines::Clip | LongLines::Scroll(_) => this.h(code_line_height(cx)),
+        })
         .bg(cx.app_theme().diff_hunk)
-        .text_code(cx)
         .text_color(cx.theme().muted_foreground)
         .child(div().w(gutter_width()).flex_shrink_0())
-        .child(
-            div()
-                .pl_2()
-                .truncate()
-                .child(SharedString::from(header.to_string())),
-        )
+        .child(code_viewport("hunk-code", long_lines, header, cx))
+}
+
+/// The part of a row beside its gutter, holding `content` as `long_lines` says. The
+/// content gets `id`, so a test can see where it was painted.
+fn code_viewport(
+    id: impl Into<ElementId>,
+    long_lines: &LongLines,
+    content: impl IntoElement,
+    cx: &App,
+) -> impl IntoElement {
+    let viewport = div()
+        .id("code-viewport")
+        .flex_1()
+        .min_w_0()
+        .text_code(cx)
+        .line_height(code_line_height(cx));
+    let content = div().id(id).test_support().child(content);
+    match long_lines {
+        LongLines::Clip => viewport
+            .pl_2()
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .child(content),
+        LongLines::Wrap => viewport.px_2().whitespace_normal().child(content),
+        LongLines::Scroll(scroll) => viewport
+            // A flex row sizes the child to its content; a block would stretch it to
+            // the viewport and leave nothing to scroll.
+            .flex()
+            .overflow_x_scroll()
+            // Without it a vertical wheel over the code scrolls sideways and never
+            // reaches the timeline.
+            .restrict_scroll_to_axis()
+            .track_scroll(&scroll.handle)
+            .whitespace_nowrap()
+            .child(
+                div()
+                    .flex_none()
+                    .pl_2()
+                    .pr_4()
+                    .child(content.min_w(scroll.width)),
+            ),
+    }
 }
 
 /// Two 40 px line-number columns and a 16 px sign column, as the design's gutter.
@@ -686,16 +817,31 @@ fn number_cell(number: Option<u32>, cx: &App) -> impl IntoElement {
         .children(number.map(|n| n.to_string()))
 }
 
-fn code_cell(text: &str, spans: &Spans, document_order: u64, cx: &App) -> impl IntoElement {
+fn code_cell(
+    id: String,
+    text: &str,
+    spans: &Spans,
+    actions: &LineActions,
+    cx: &App,
+) -> impl IntoElement {
     let (text, spans) = expand_tabs(text, spans);
-    div()
-        .flex_1()
-        .min_w_0()
-        .pl_2()
-        .overflow_hidden()
-        .whitespace_nowrap()
-        .text_code(cx)
-        .child(SelectableCode::new("code", text, spans).document_order(document_order))
+    let code = SelectableCode::new("code", text, spans).document_order(actions.document_order);
+    code_viewport(SharedString::from(id), &actions.long_lines, code, cx)
+}
+
+/// A line's row: one line of code tall, or as tall as its wrapped code. The gutter and
+/// the code both fill that height.
+fn line_row(long_lines: &LongLines, cx: &App) -> gpui_kit::Div {
+    let row = h_flex().items_stretch();
+    match long_lines {
+        LongLines::Wrap => row.min_h(code_line_height(cx)),
+        LongLines::Clip | LongLines::Scroll(_) => row.h(code_line_height(cx)),
+    }
+}
+
+/// The numbers and sign of a gutter, kept on the first line of a row that wrapped.
+fn gutter_cells(cx: &App) -> gpui_kit::Div {
+    h_flex().h(code_line_height(cx))
 }
 
 /// What a code line offers besides its text: commenting and selecting from the gutter,
@@ -707,6 +853,7 @@ struct LineActions {
     on_select: Option<SelectHandler>,
     on_comment_line: Option<LineHandler>,
     menu: Option<LineMenuBuilder>,
+    long_lines: LongLines,
     document_order: u64,
 }
 
@@ -811,11 +958,10 @@ fn unified_line(
     } else {
         gutter
     };
-    h_flex()
+    line_row(&actions.long_lines, cx)
         .id("line")
         .group(LINE_GROUP)
         .relative()
-        .h(code_line_height(cx))
         .bg(background)
         .when(actions.selected, |this| {
             this.child(selection_fill(format!("selected-{numbers}"), cx))
@@ -824,25 +970,27 @@ fn unified_line(
             this.on_mouse_move(select)
         })
         .child(
-            h_flex()
+            div()
                 .id(SharedString::from(format!("gutter-{numbers}")))
                 .relative()
-                .h_full()
                 .w(gutter_width())
                 .flex_shrink_0()
                 .bg(gutter)
                 .when_some(actions.press(), |this, select| {
                     this.on_mouse_down(MouseButton::Left, select)
                 })
-                .child(number_cell(line.old_line, cx))
-                .child(number_cell(line.new_line, cx))
                 .child(
-                    div()
-                        .w_4()
-                        .text_gutter(cx)
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(sign_color)
-                        .child(sign(line.kind)),
+                    gutter_cells(cx)
+                        .child(number_cell(line.old_line, cx))
+                        .child(number_cell(line.new_line, cx))
+                        .child(
+                            div()
+                                .w_4()
+                                .text_gutter(cx)
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(sign_color)
+                                .child(sign(line.kind)),
+                        ),
                 )
                 .when(commentable, |this| this.child(comment_badge(cx)))
                 .when_some(
@@ -861,7 +1009,13 @@ fn unified_line(
                 )
                 .test_support(),
         )
-        .child(code_cell(&line.text, spans, actions.document_order, cx))
+        .child(code_cell(
+            format!("code-{numbers}"),
+            &line.text,
+            spans,
+            &actions,
+            cx,
+        ))
         .context_menu(actions.context_menu(line))
 }
 
@@ -872,10 +1026,9 @@ fn split_side(
 ) -> impl IntoElement {
     let old_side = actions.side == DiffSide::Base;
     let Some((line, spans)) = line else {
-        return h_flex()
+        return line_row(&actions.long_lines, cx)
             .flex_1()
             .min_w_0()
-            .h(code_line_height(cx))
             .bg(cx.theme().muted.opacity(0.4))
             .into_any_element();
     };
@@ -898,13 +1051,12 @@ fn split_side(
     } else {
         gutter
     };
-    h_flex()
+    line_row(&actions.long_lines, cx)
         .id(if old_side { "line-base" } else { "line-head" })
         .group(LINE_GROUP)
         .relative()
         .flex_1()
         .min_w_0()
-        .h(code_line_height(cx))
         .bg(background)
         .when(actions.selected, |this| {
             this.child(selection_fill(format!("selected-{numbers}"), cx))
@@ -913,24 +1065,24 @@ fn split_side(
             this.on_mouse_move(select)
         })
         .child(
-            h_flex()
+            div()
                 .id(SharedString::from(format!("split-{numbers}")))
                 .relative()
-                .h_full()
                 .w(rems(3.5))
                 .flex_shrink_0()
                 .bg(gutter)
                 .when_some(actions.press(), |this, select| {
                     this.on_mouse_down(MouseButton::Left, select)
                 })
-                .child(number_cell(number, cx))
                 .child(
-                    div()
-                        .w_4()
-                        .text_gutter(cx)
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(sign_color)
-                        .child(sign(line.kind)),
+                    gutter_cells(cx).child(number_cell(number, cx)).child(
+                        div()
+                            .w_4()
+                            .text_gutter(cx)
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(sign_color)
+                            .child(sign(line.kind)),
+                    ),
                 )
                 .when(commentable, |this| this.child(comment_badge(cx)))
                 .when_some(
@@ -942,7 +1094,13 @@ fn split_side(
                 )
                 .test_support(),
         )
-        .child(code_cell(&line.text, spans, actions.document_order, cx))
+        .child(code_cell(
+            format!("code-{numbers}"),
+            &line.text,
+            spans,
+            &actions,
+            cx,
+        ))
         .context_menu(actions.context_menu(line))
         .into_any_element()
 }
@@ -975,6 +1133,14 @@ fn selection_fill(id: String, cx: &App) -> impl IntoElement {
 
 /// Columns between tab stops when a tab is expanded.
 const TAB_WIDTH: usize = 4;
+
+/// How many columns `text` takes once its tabs are expanded.
+fn expanded_columns(text: &str) -> usize {
+    text.chars().fold(0, |column, ch| match ch {
+        '\t' => column + TAB_WIDTH - column % TAB_WIDTH,
+        _ => column + 1,
+    })
+}
 
 /// Expands tabs to the next tab stop, shifting the highlight spans by the bytes each
 /// tab grew, so indented Go and Makefiles keep their colors.

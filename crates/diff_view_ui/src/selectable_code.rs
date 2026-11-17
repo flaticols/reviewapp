@@ -149,7 +149,8 @@ impl Element for SelectableCode {
     }
 }
 
-/// Paints the selection over `range`. Diff lines never wrap, so it is one quad.
+/// Paints the selection over `range`: one quad per row of text, since a long line can
+/// wrap. Rows between the first and the last are covered edge to edge.
 fn paint_selection(
     layout: &TextLayout,
     range: std::ops::Range<usize>,
@@ -162,12 +163,26 @@ fn paint_selection(
     ) else {
         return;
     };
-    window.paint_quad(PaintQuad {
-        bounds: Bounds::from_corners(start, Point::new(end.x, end.y + layout.line_height())),
-        background: color.into(),
-        corner_radii: Corners::default(),
-        border_widths: Edges::default(),
-        border_color: transparent_black(),
-        border_style: BorderStyle::default(),
-    });
+    let (line_height, bounds) = (layout.line_height(), layout.bounds());
+    let mut top = start.y;
+    while top <= end.y {
+        let left = if top == start.y {
+            start.x
+        } else {
+            bounds.left()
+        };
+        let right = if top == end.y { end.x } else { bounds.right() };
+        window.paint_quad(PaintQuad {
+            bounds: Bounds::from_corners(
+                Point::new(left, top),
+                Point::new(right, top + line_height),
+            ),
+            background: color.into(),
+            corner_radii: Corners::default(),
+            border_widths: Edges::default(),
+            border_color: transparent_black(),
+            border_style: BorderStyle::default(),
+        });
+        top += line_height;
+    }
 }

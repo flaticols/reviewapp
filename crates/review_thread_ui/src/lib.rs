@@ -27,7 +27,8 @@ use app_state_ui::actions::{
     CheckOut, GoBack, OpenInZed, ReviewWithAgent, SubmitComment, SubmitReview,
 };
 use app_state_ui::{DetailState, PullRequestStore, PullRequestStoreEvent, StoresExt as _};
-use diff_view_ui::{COLLAPSE_THRESHOLD, DiffMode};
+use diff_view_ui::{COLLAPSE_THRESHOLD, CodeScroll, DiffMode, LongLines};
+use gpui_kit::ScrollHandle;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     ActiveTheme as _, WindowExt as _, h_flex,
@@ -68,6 +69,15 @@ impl Default for ReviewLayout {
             before_focus: None,
         }
     }
+}
+
+/// A file's widest line, with what it was shaped from. It is good for as long as the
+/// view still shows that very diff in that font.
+struct CodeWidth {
+    file: Rc<diff_model::FileDiff>,
+    font_family: SharedString,
+    font_size: Pixels,
+    width: Pixels,
 }
 
 impl gpui_kit::Global for ReviewLayout {}
@@ -223,6 +233,13 @@ pub struct ReviewThreadView {
     collapse_initialized: bool,
     highlights: HashMap<(String, bool), Rc<FileHighlights>>,
     files: HashMap<String, Rc<diff_model::FileDiff>>,
+    /// Where each file's code is scrolled sideways, by path. A position outlives the
+    /// file's rows leaving the screen.
+    code_scroll: HashMap<String, ScrollHandle>,
+    /// Each file's widest line, by path.
+    code_widths: HashMap<String, CodeWidth>,
+    /// Whether the rows were last measured with long lines wrapped.
+    measured_wrap: Option<bool>,
     composer: Entity<TextareaState>,
     reply_inputs: HashMap<String, Entity<TextareaState>>,
     new_thread: Option<(String, u32, Entity<TextareaState>)>,
@@ -359,6 +376,9 @@ impl ReviewThreadView {
             collapse_initialized: false,
             highlights: HashMap::new(),
             files: HashMap::new(),
+            code_scroll: HashMap::new(),
+            code_widths: HashMap::new(),
+            measured_wrap: None,
             composer,
             reply_inputs: HashMap::new(),
             new_thread: None,
@@ -751,6 +771,47 @@ impl ReviewThreadView {
                 .update(cx, |store, cx| store.edit_finding(&key, &id, body, cx));
         }
         cx.notify();
+    }
+
+    /// What `path`'s rows do with long lines: wrap them when the reviewer asked for
+    /// that, otherwise scroll sideways together.
+    fn long_lines_for(&mut self, path: &str, window: &Window, cx: &App) -> LongLines {
+        if cx
+            .stores()
+            .settings()
+            .read(cx)
+            .preferences()
+            .wrap_diff_lines
+        {
+            return LongLines::Wrap;
+        }
+        let Some(file) = self.files.get(path) else {
+            return LongLines::Clip;
+        };
+        let font_family = cx.theme().mono_font_family.clone();
+        let font_size = theme_ui::code_font_size(window, cx);
+        let width = match self.code_widths.get(path) {
+            Some(known)
+                if Rc::ptr_eq(&known.file, file)
+                    && known.font_family == font_family
+                    && known.font_size == font_size =>
+            {
+                known.width
+            }
+            _ => {
+                let width = diff_view_ui::code_width(file, window, cx);
+                let known = CodeWidth {
+                    file: file.clone(),
+                    font_family,
+                    font_size,
+                    width,
+                };
+                self.code_widths.insert(path.to_string(), known);
+                width
+            }
+        };
+        let handle = self.code_scroll.entry(path.to_string()).or_default();
+        LongLines::Scroll(CodeScroll::new(handle.clone(), width))
     }
 
     fn highlights_for(&mut self, path: &str, cx: &App) -> Rc<FileHighlights> {

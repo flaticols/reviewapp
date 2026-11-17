@@ -2538,3 +2538,237 @@ fn the_sort_menu_groups_the_list_by_stack(cx: &mut TestAppContext) {
     })
     .unwrap();
 }
+
+/// Turns the wheel by `delta` with the pointer just inside the code of the line whose
+/// gutter is `gutter`.
+fn wheel_over_code(
+    window: &mut gpui_kit::Window,
+    gutter: &'static str,
+    delta: gpui_kit::Point<gpui_kit::Pixels>,
+    cx: &mut gpui_kit::App,
+) {
+    use gpui_kit::InputEvent as _;
+    let gutter = window.find(gutter).bounds();
+    let position = gpui_kit::point(gutter.right() + px(24.), gutter.center().y);
+    window.dispatch_event(
+        gpui_kit::MouseMoveEvent {
+            position,
+            ..Default::default()
+        }
+        .to_platform_input(),
+        cx,
+    );
+    window.dispatch_event(
+        gpui_kit::ScrollWheelEvent {
+            position,
+            delta: gpui_kit::ScrollDelta::Pixels(delta),
+            ..Default::default()
+        }
+        .to_platform_input(),
+        cx,
+    );
+    window.render_frame(cx);
+}
+
+#[gpui_kit::test]
+fn long_diff_lines_scroll_sideways_with_the_rest_of_their_file(cx: &mut TestAppContext) {
+    use gpui_kit::point;
+    let (window, _) = open_featured(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let edge = window.find("timeline").bounds().right();
+        let long = window.find("code-0-139").bounds();
+        let short = window.find("code-0-140").bounds();
+        let gutter = window.find("gutter-0-139").bounds();
+        assert!(
+            long.right() > edge,
+            "the sample's long line runs past the card: {long:?} in {edge:?}"
+        );
+
+        wheel_over_code(window, "gutter-0-140", point(px(-200.), px(0.)), cx);
+        assert_eq!(
+            window.find("code-0-140").bounds().left(),
+            short.left() - px(200.),
+            "the wheel moves the code of the line it is over"
+        );
+        assert_eq!(
+            window.find("code-0-139").bounds().left(),
+            long.left() - px(200.),
+            "and the file's other lines move with it"
+        );
+        assert_eq!(
+            window.find("gutter-0-139").bounds(),
+            gutter,
+            "line numbers stay where they are"
+        );
+
+        wheel_over_code(window, "gutter-0-140", point(px(-9000.), px(0.)), cx);
+        let scrolled = window.find("code-0-139").bounds();
+        assert!(
+            scrolled.right() < edge,
+            "scrolling all the way brings the long line's end into the card: {scrolled:?}"
+        );
+        assert_eq!(
+            window.find("code-0-140").bounds().left(),
+            scrolled.left(),
+            "a short line stops where the long one does"
+        );
+
+        wheel_over_code(window, "gutter-0-140", point(px(0.), px(-60.)), cx);
+        assert_eq!(
+            window.find("gutter-0-139").bounds().top(),
+            gutter.top() - px(60.),
+            "a vertical wheel over code still scrolls the timeline"
+        );
+        assert_eq!(
+            window.find("code-0-139").bounds().left(),
+            scrolled.left(),
+            "and leaves the code where it was sideways"
+        );
+
+        use gpui_kit::component::WindowExt as _;
+        window.click("gutter-137-137", cx);
+        window.render_frame(cx);
+        assert!(
+            window.has_focused_input(cx),
+            "line numbers still start a comment with code scrolled under them"
+        );
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn an_open_review_rewraps_when_the_setting_changes(cx: &mut TestAppContext) {
+    use gpui_kit::point;
+    let (window, _) = open_featured(cx);
+    let set_wrap = |wrap: bool, cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            use app_state_ui::StoresExt as _;
+            cx.stores().settings().clone().update(cx, |settings, cx| {
+                settings.update_preferences(cx, |p| p.wrap_diff_lines = wrap)
+            });
+        });
+        cx.run_until_parked();
+    };
+    let one_line = cx
+        .update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.find("gutter-0-139").bounds().size.height
+        })
+        .unwrap();
+
+    set_wrap(true, cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let long = window.find("gutter-0-139").bounds();
+        assert!(
+            long.size.height >= one_line * 2.,
+            "the long line's row grows in the review that is open: {long:?}"
+        );
+        assert_eq!(
+            window.find("gutter-0-140").bounds().top(),
+            long.bottom(),
+            "and the list makes room for it instead of drawing the next line over it"
+        );
+    })
+    .unwrap();
+
+    set_wrap(false, cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let long = window.find("gutter-0-139").bounds();
+        assert_eq!(long.size.height, one_line, "turning it off unwraps the row");
+        assert_eq!(
+            window.find("gutter-0-140").bounds().top(),
+            long.bottom(),
+            "and the list closes the gap"
+        );
+        let code = window.find("code-0-139").bounds().left();
+        wheel_over_code(window, "gutter-0-140", point(px(-200.), px(0.)), cx);
+        assert_eq!(
+            window.find("code-0-139").bounds().left(),
+            code - px(200.),
+            "and the code scrolls sideways again"
+        );
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn the_wrap_switch_wraps_long_diff_lines(cx: &mut TestAppContext) {
+    use gpui_kit::point;
+    let (window, _) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.press("cmd-,", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        // Settings navigation rows are section-group-row; Appearance is the fifth.
+        window.click("0-0-4", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("wrap-diff-lines").checked(),
+            Some(false),
+            "long lines scroll by default"
+        );
+        window.click("wrap-diff-lines", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("wrap-diff-lines").checked(),
+            Some(true),
+            "the switch turns on"
+        );
+        window.click("back-to-pull-requests", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("flaticols/switchfold#482", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let edge = window.find("timeline").bounds().right();
+        let long = window.find("code-0-139").bounds();
+        let one_line = window.find("gutter-0-140").bounds().size.height;
+        assert!(
+            long.right() < edge,
+            "the long line fits the card: {long:?} in {edge:?}"
+        );
+        assert!(
+            long.size.height >= one_line * 2.,
+            "by taking more rows of text: {long:?}, one line is {one_line:?}"
+        );
+        assert_eq!(
+            window.find("gutter-0-139").bounds().size.height,
+            long.size.height,
+            "its gutter grows with it"
+        );
+        assert_eq!(
+            window.find("gutter-0-141").bounds().top(),
+            window.find("gutter-0-140").bounds().bottom(),
+            "and the lines below follow without a gap"
+        );
+
+        wheel_over_code(window, "gutter-0-139", point(px(-200.), px(0.)), cx);
+        assert_eq!(
+            window.find("code-0-139").bounds().left(),
+            long.left(),
+            "wrapped code has nowhere to scroll sideways"
+        );
+    })
+    .unwrap();
+}

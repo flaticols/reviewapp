@@ -16,7 +16,7 @@ use settings_model::{Appearance, Preferences};
 
 pub use settings_model::{DarkTheme, LightTheme};
 pub use tokens::{AppTheme, TAG_NAMES};
-pub use typography::{TypographyExt, code_line_height};
+pub use typography::{TypographyExt, code_font_size, code_line_height};
 
 /// The title bar's height, the compact height of macOS unified toolbars; overlays that
 /// sit below it use the same value. Fixed rather than in rem: the traffic lights don't

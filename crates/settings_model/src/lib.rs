@@ -435,6 +435,8 @@ pub struct Preferences {
     /// Lists pull requests under the GitHub stack they belong to. The list groups one
     /// way at a time, so this and the milestone grouping are not both on.
     pub group_pull_requests_by_stack: bool,
+    /// Wraps diff lines wider than their card. Off, a file's code scrolls sideways.
+    pub wrap_diff_lines: bool,
 }
 
 /// A color the reviewer gives a repository, to tell it apart in the sidebar and the
@@ -589,6 +591,7 @@ impl Default for Preferences {
             group_repositories_by_owner: false,
             group_pull_requests_by_milestone: false,
             group_pull_requests_by_stack: false,
+            wrap_diff_lines: false,
             inspector_collapsed: false,
             outline_collapsed: false,
         }

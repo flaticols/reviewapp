@@ -1,5 +1,5 @@
 use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::{AbsoluteLength, App, FontWeight, Pixels, Styled, px, rems};
+use gpui_kit::{AbsoluteLength, App, FontWeight, Pixels, Styled, Window, px, rems};
 
 /// The type roles the design uses, on the rem scale so they follow interface zoom.
 /// Sizes are in design pixels at the default 16 px base.
@@ -57,6 +57,11 @@ impl<T: Styled> TypographyExt for T {}
 fn code_size(cx: &App) -> Option<Pixels> {
     cx.try_global::<crate::CodeFont>()
         .and_then(|font| font.size)
+}
+
+/// The size [`TypographyExt::text_code`] resolves to in `window`.
+pub fn code_font_size(window: &Window, cx: &App) -> Pixels {
+    code_size(cx).unwrap_or_else(|| window.rem_size() * 0.75)
 }
 
 /// The height of one line of code in a diff or log: 20 px at the default interface

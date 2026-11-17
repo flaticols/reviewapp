@@ -1,11 +1,12 @@
 //! Settings › Appearance: light, dark or system theme, the light and dark palettes,
-//! interface size, and the font and size used for code.
+//! interface size, the font and size used for code, and whether long diff lines wrap.
 
 use app_state_ui::StoresExt as _;
 use gpui_kit::component::{
     IndexPath, Sizable as _,
     radio::RadioGroup,
     select::{Select, SelectEvent, SelectState},
+    switch::Switch,
 };
 use gpui_kit::{
     AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, SharedString,
@@ -300,6 +301,22 @@ impl Render for AppearancePage {
                             div()
                                 .w(rems(11.25))
                                 .child(Select::new(&self.code_size).small()),
+                        ),
+                )
+                .row(
+                    SettingsRow::new("Wrap long lines")
+                        .description("Off, a file's diff scrolls sideways to show them.")
+                        .trailing(
+                            Switch::new("wrap-diff-lines")
+                                .checked(preferences.wrap_diff_lines)
+                                .accessibility_label("Wrap long lines")
+                                .on_change(|checked, _, cx| {
+                                    let wrap = *checked;
+                                    cx.stores().settings().clone().update(cx, |settings, cx| {
+                                        settings
+                                            .update_preferences(cx, |p| p.wrap_diff_lines = wrap)
+                                    });
+                                }),
                         ),
                 ),
         )
