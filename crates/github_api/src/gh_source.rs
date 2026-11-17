@@ -299,6 +299,16 @@ fn merge_info(repository: &Value, node: &Value) -> Option<MergeInfo> {
     Some(info)
 }
 
+/// The REST merge request. Without a title GitHub writes its own title and message.
+fn merge_body(method: MergeMethod, title: &str, message: &str, head_sha: &str) -> Value {
+    let mut body = json!({ "merge_method": method.api_name(), "sha": head_sha });
+    if method.has_message() && !title.is_empty() {
+        body["commit_title"] = json!(title);
+        body["commit_message"] = json!(message);
+    }
+    body
+}
+
 /// The merge status query for `keys`: one `pN` alias each, with owners, names and
 /// numbers passed as variables.
 fn merge_status_query(keys: &[PullRequestKey]) -> (String, Value) {
@@ -1115,18 +1125,13 @@ impl PullRequestSource for GhSource {
         message: &str,
         head_sha: &str,
     ) -> Result<(), ApiError> {
-        let mut body = json!({ "merge_method": method.api_name(), "sha": head_sha });
-        if method.has_message() {
-            body["commit_title"] = json!(title);
-            body["commit_message"] = json!(message);
-        }
         self.api(
             &[
                 "--method",
                 "PUT",
                 &format!("repos/{}/pulls/{}/merge", key.repo(), key.number()),
             ],
-            Some(&body),
+            Some(&merge_body(method, title, message, head_sha)),
         )?;
         Ok(())
     }
@@ -1447,6 +1452,22 @@ mod tests {
         assert_eq!(
             found.iter().map(|status| status.key.clone()).collect::<Vec<_>>(),
             [queued(1)]
+        );
+    }
+
+    #[test]
+    fn merge_without_a_title_keeps_githubs_default() {
+        assert_eq!(
+            merge_body(MergeMethod::Squash, "", "", "h1"),
+            json!({ "merge_method": "squash", "sha": "h1" })
+        );
+    }
+
+    #[test]
+    fn merge_with_a_title_sends_it() {
+        assert_eq!(
+            merge_body(MergeMethod::Squash, "T", "M", "h1"),
+            json!({ "merge_method": "squash", "sha": "h1", "commit_title": "T", "commit_message": "M" })
         );
     }
 

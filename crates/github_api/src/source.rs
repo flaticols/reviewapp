@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use pr_model::{PullRequest, PullRequestKey, RepoSlug};
@@ -180,6 +181,8 @@ pub struct FixtureSource {
     actions: Mutex<Vec<String>>,
     /// Merge statuses served in place of the ones built from the details.
     merge_statuses: Mutex<HashMap<PullRequestKey, MergeStatus>>,
+    /// Makes [`PullRequestSource::merge_statuses`] fail, as when GitHub is unreachable.
+    fail_merge_statuses: AtomicBool,
 }
 
 impl FixtureSource {
@@ -195,7 +198,13 @@ impl FixtureSource {
             progressions: Mutex::new(Vec::new()),
             actions: Mutex::new(Vec::new()),
             merge_statuses: Mutex::new(HashMap::new()),
+            fail_merge_statuses: AtomicBool::new(false),
         }
+    }
+
+    /// Makes merge status requests fail while `fail` is set.
+    pub fn fail_merge_statuses(&self, fail: bool) {
+        self.fail_merge_statuses.store(fail, Ordering::Relaxed);
     }
 
     /// Serves `status` for its pull request from now on.
@@ -359,6 +368,9 @@ impl PullRequestSource for FixtureSource {
     }
 
     fn merge_statuses(&self, keys: &[PullRequestKey]) -> Result<Vec<MergeStatus>, ApiError> {
+        if self.fail_merge_statuses.load(Ordering::Relaxed) {
+            return Err(ApiError::new("GitHub couldn’t be reached."));
+        }
         let scripted = self
             .merge_statuses
             .lock()

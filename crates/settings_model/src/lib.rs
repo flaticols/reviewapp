@@ -764,34 +764,37 @@ mod tests {
         assert_eq!(preferences.merge_queue, ["a/x#1", "a/x#2"]);
     }
 
+    fn queued(entries: &[&str]) -> Preferences {
+        Preferences {
+            merge_queue: entries.iter().map(|entry| entry.to_string()).collect(),
+            ..Preferences::default()
+        }
+    }
+
     #[test]
     fn unqueuing_removes() {
-        let mut preferences = Preferences::default();
-        preferences.merge_queue = vec!["a/x#1".into(), "a/x#2".into()];
+        let mut preferences = queued(&["a/x#1", "a/x#2"]);
         preferences.set_queued("a/x#1", false);
         assert_eq!(preferences.merge_queue, ["a/x#2"]);
     }
 
     #[test]
     fn moving_up_skips_other_repositories() {
-        let mut preferences = Preferences::default();
-        preferences.merge_queue = vec!["a/x#1".into(), "a/y#5".into(), "a/x#2".into()];
+        let mut preferences = queued(&["a/x#1", "a/y#5", "a/x#2"]);
         preferences.move_queued("a/x#2", true);
         assert_eq!(preferences.merge_queue, ["a/x#2", "a/y#5", "a/x#1"]);
     }
 
     #[test]
     fn moving_down_swaps_with_the_next_of_the_repository() {
-        let mut preferences = Preferences::default();
-        preferences.merge_queue = vec!["a/x#1".into(), "a/y#5".into(), "a/x#2".into()];
+        let mut preferences = queued(&["a/x#1", "a/y#5", "a/x#2"]);
         preferences.move_queued("a/x#1", false);
         assert_eq!(preferences.merge_queue, ["a/x#2", "a/y#5", "a/x#1"]);
     }
 
     #[test]
     fn moving_the_first_up_does_nothing() {
-        let mut preferences = Preferences::default();
-        preferences.merge_queue = vec!["a/y#5".into(), "a/x#1".into(), "a/x#2".into()];
+        let mut preferences = queued(&["a/y#5", "a/x#1", "a/x#2"]);
         preferences.move_queued("a/x#1", true);
         assert_eq!(preferences.merge_queue, ["a/y#5", "a/x#1", "a/x#2"]);
     }

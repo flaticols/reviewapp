@@ -98,6 +98,19 @@ pub(crate) enum Action {
     },
 }
 
+impl Action {
+    /// The pull request the action is about.
+    pub fn key(&self) -> &PullRequestKey {
+        match self {
+            Self::Remove { key, .. }
+            | Self::DisableAutoMerge { key, .. }
+            | Self::Rebase { key, .. }
+            | Self::Merge { key, .. }
+            | Self::EnableAutoMerge { key, .. } => key,
+        }
+    }
+}
+
 /// One repository's next actions, the pull request now in flight and every remaining
 /// row, in queue order.
 #[derive(Debug)]
