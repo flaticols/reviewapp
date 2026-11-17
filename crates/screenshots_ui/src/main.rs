@@ -79,6 +79,10 @@ enum Scene {
     Triage,
     Appearance,
     Keyboard,
+    /// Settings › Keyboard scrolled to its Trackpad section.
+    KeyboardTrackpad,
+    /// The list after a trackpad pinch made the interface larger.
+    ListPinched,
     Palette,
     /// Go to file with a fuzzy query typed.
     GoToFile,
@@ -100,7 +104,7 @@ enum Scene {
 }
 
 impl Scene {
-    const ALL: [Scene; 45] = [
+    const ALL: [Scene; 47] = [
         Self::List,
         Self::OneCommit,
         Self::RowMenu,
@@ -136,6 +140,8 @@ impl Scene {
         Self::Triage,
         Self::Appearance,
         Self::Keyboard,
+        Self::KeyboardTrackpad,
+        Self::ListPinched,
         Self::Palette,
         Self::GoToFile,
         Self::LongLineScrolled,
@@ -189,6 +195,8 @@ impl Scene {
             Self::Triage => "07f-triage",
             Self::Appearance => "07d-appearance",
             Self::Keyboard => "07e-keyboard",
+            Self::KeyboardTrackpad => "07g-keyboard-trackpad",
+            Self::ListPinched => "01h-list-pinched",
             Self::Palette => "08-palette",
             Self::GoToFile => "08b-go-to-file",
             Self::AgentRun => "05-agent-running",
@@ -417,7 +425,7 @@ fn render(
             Scene::Agents => Some(SettingsPageKind::AgentsAndEditor),
             Scene::Triage => Some(SettingsPageKind::Triage),
             Scene::Appearance => Some(SettingsPageKind::Appearance),
-            Scene::Keyboard => Some(SettingsPageKind::Keyboard),
+            Scene::Keyboard | Scene::KeyboardTrackpad => Some(SettingsPageKind::Keyboard),
             _ => None,
         };
         if let Some(page) = page {
@@ -498,6 +506,42 @@ fn render(
             use gpui_kit::test::TestWindowExt as _;
             window.render_frame(cx);
             window.click("list-filter", cx);
+        }
+        Scene::KeyboardTrackpad => {
+            use gpui_kit::InputEvent as _;
+            use gpui_kit::test::TestWindowExt as _;
+            window.render_frame(cx);
+            let position = window.bounds().size.center();
+            window.dispatch_event(
+                gpui_kit::ScrollWheelEvent {
+                    position,
+                    delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-9000.))),
+                    ..Default::default()
+                }
+                .to_platform_input(),
+                cx,
+            );
+        }
+        Scene::ListPinched => {
+            use gpui_kit::InputEvent as _;
+            use gpui_kit::test::TestWindowExt as _;
+            window.render_frame(cx);
+            let position = window.bounds().size.center();
+            for (delta, phase) in [
+                (0., gpui_kit::TouchPhase::Started),
+                (0.6, gpui_kit::TouchPhase::Moved),
+            ] {
+                window.dispatch_event(
+                    gpui_kit::PinchEvent {
+                        position,
+                        delta,
+                        phase,
+                        ..Default::default()
+                    }
+                    .to_platform_input(),
+                    cx,
+                );
+            }
         }
         Scene::RepoMenu => {
             use gpui_kit::test::TestWindowExt as _;

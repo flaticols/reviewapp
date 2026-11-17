@@ -24,6 +24,7 @@ app_state_ui.workspace = true
 diff_model.workspace = true
 futures.workspace = true
 chrome_ui.workspace = true
+haptics_ui.workspace = true
 fixtures.workspace = true
 github_api.workspace = true
 pr_list_ui.workspace = true

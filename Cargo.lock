@@ -318,6 +318,7 @@ dependencies = [
  "async-channel",
  "chrome_ui",
  "gpui-kit",
+ "haptics_ui",
  "pr_list_ui",
  "review_thread_ui",
  "settings_model",
@@ -4205,6 +4206,14 @@ dependencies = [
  "crunchy",
  "num-traits",
  "zerocopy",
+]
+
+[[package]]
+name = "haptics_ui"
+version = "0.1.0"
+dependencies = [
+ "gpui-kit",
+ "objc2-app-kit 0.3.2",
 ]
 
 [[package]]
@@ -10849,6 +10858,7 @@ dependencies = [
  "git_diff",
  "github_api",
  "gpui-kit",
+ "haptics_ui",
  "pr_actions_ui",
  "pr_cache",
  "pr_list_ui",

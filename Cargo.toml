@@ -83,6 +83,7 @@ pr_actions_ui = { path = "crates/pr_actions_ui" }
 sha2 = "0.10"
 keychain = { path = "crates/keychain" }
 theme_ui = { path = "crates/theme_ui" }
+haptics_ui = { path = "crates/haptics_ui" }
 widgets_ui = { path = "crates/widgets_ui" }
 syntax_ui = { path = "crates/syntax_ui" }
 app_state_ui = { path = "crates/app_state_ui" }

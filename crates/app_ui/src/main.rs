@@ -50,6 +50,7 @@ fn main() {
         review_thread_ui::init(cx);
         workspace_ui::init(cx);
         workspace_ui::install_menus(cx);
+        haptics_ui::install_system(cx);
 
         let home_dir = home.clone().unwrap_or_else(|| "/".into());
         let data = if launch.sample {

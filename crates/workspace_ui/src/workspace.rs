@@ -8,9 +8,11 @@ use chrome_ui::{AppStatusBar, AppTitleBar};
 use gpui_kit::component::{ActiveTheme as _, v_flex};
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Entity, Focusable as _, InteractiveElement as _,
-    IntoElement, KeyBinding, ParentElement as _, Render, SharedString, Styled as _, Subscription,
-    Window, div, prelude::FluentBuilder as _,
+    IntoElement, KeyBinding, MouseButton, NavigationDirection, ParentElement as _, PinchEvent,
+    Render, SharedString, Styled as _, Subscription, TouchPhase, Window, div,
+    prelude::FluentBuilder as _,
 };
+use haptics_ui::Haptic;
 use pr_list_ui::{PullRequestList, PullRequestListEvent};
 use pr_model::RepoSlug;
 use review_thread_ui::{ReviewPanes, ReviewThreadEvent, ReviewThreadView};
@@ -19,6 +21,10 @@ use settings_ui::{SettingsEvent, SettingsPageKind, SettingsView};
 use sign_in_ui::{SignInEvent, SignInView};
 
 const CONTEXT: &str = "Workspace";
+
+/// How much magnification a pinch adds up before the interface moves to its next size.
+/// Four steps span every size, so a full spread of the fingers crosses most of them.
+const PINCH_STEP: f32 = 0.25;
 
 /// Registers window-level key bindings. Call once at startup, before menus.
 pub fn init(cx: &mut App) {
@@ -62,6 +68,8 @@ pub struct Workspace {
     pull_request_list: Entity<PullRequestList>,
     route_subscription: Option<Subscription>,
     entity: gpui_kit::WeakEntity<Self>,
+    /// Magnification of the pinch in progress that has not yet moved the interface a size.
+    pinched: f32,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -110,6 +118,7 @@ impl Workspace {
             pull_request_list,
             route_subscription: None,
             entity: cx.entity().downgrade(),
+            pinched: 0.,
             _subscriptions: observed,
         };
         if settings.read(cx).accounts().is_empty() {
@@ -474,6 +483,32 @@ impl Workspace {
         theme_ui::apply(&preferences, Some(window), cx);
     }
 
+    /// Steps the interface size as a trackpad pinch spreads or closes, with a haptic tick
+    /// for each size it moves.
+    fn pinch(&mut self, event: &PinchEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // Reset at the start, not the end: macOS reports a cancelled pinch without an
+        // ended phase, and its leftover would carry into the next gesture.
+        if event.phase == TouchPhase::Started {
+            self.pinched = 0.;
+        }
+        self.pinched += event.delta;
+        let steps = (self.pinched / PINCH_STEP).trunc();
+        if steps == 0. {
+            return;
+        }
+        self.pinched -= steps * PINCH_STEP;
+        let font_size = |cx: &App| cx.stores().settings().read(cx).preferences().font_size;
+        let before = font_size(cx);
+        self.zoom(Some(steps as isize), window, cx);
+        if font_size(cx) == before {
+            // At the largest or smallest size: drop the excess so that reversing the
+            // pinch responds at once.
+            self.pinched = 0.;
+        } else {
+            haptics_ui::perform(Haptic::LevelChange, cx);
+        }
+    }
+
     fn render_title_bar(&self, cx: &App) -> AppTitleBar {
         let settings = cx.stores().settings().read(cx);
         let location: SharedString = match self.current_repository(cx) {
@@ -593,6 +628,13 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ZoomIn, window, cx| this.zoom(Some(1), window, cx)))
             .on_action(cx.listener(|this, _: &ZoomOut, window, cx| this.zoom(Some(-1), window, cx)))
             .on_action(cx.listener(|this, _: &ResetZoom, window, cx| this.zoom(None, window, cx)))
+            .on_pinch(cx.listener(Self::pinch))
+            // A three-finger swipe arrives as the mouse's back button. It takes the same
+            // path as Cmd-[, so it keeps a draft that Escape would keep.
+            .on_mouse_down(
+                MouseButton::Navigate(NavigationDirection::Back),
+                |_, window, cx| window.dispatch_action(Box::new(GoBack), cx),
+            )
             .on_action(|_: &CloseWindow, window, _| window.remove_window())
             .on_action(
                 cx.listener(|this, _: &FocusSearch, window, cx| this.open_palette(window, cx)),

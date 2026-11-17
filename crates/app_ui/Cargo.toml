@@ -17,6 +17,7 @@ gpui-kit.workspace = true
 acp_client.workspace = true
 app_state_ui.workspace = true
 chrome_ui.workspace = true
+haptics_ui.workspace = true
 pr_list_ui.workspace = true
 review_thread_ui.workspace = true
 settings_model.workspace = true

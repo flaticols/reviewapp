@@ -1,14 +1,16 @@
 //! Settings › Keyboard: the shortcuts Switchfold binds, read from the live keymap.
 
 use app_state_ui::actions::{
-    CheckOut, ClosePane, FocusFilter, FocusNextPane, FocusPaneDown, FocusPaneLeft,
-    FocusPaneRight, FocusPaneUp, FocusSearch, GoBack, OpenInZed, OpenSelected, OpenSettings,
-    Refresh, ResetZoom, ReviewWithAgent, SelectNext, SelectPrevious, SplitSideBySide,
-    SplitStacked, SubmitComment, SubmitReview, ToggleFocusMode, ToggleInspector, ToggleSidebar,
-    ZoomIn, ZoomOut, ZoomPane,
+    CheckOut, ClosePane, FocusFilter, FocusNextPane, FocusPaneDown, FocusPaneLeft, FocusPaneRight,
+    FocusPaneUp, FocusSearch, GoBack, OpenInZed, OpenSelected, OpenSettings, Refresh, ResetZoom,
+    ReviewWithAgent, SelectNext, SelectPrevious, SplitSideBySide, SplitStacked, SubmitComment,
+    SubmitReview, ToggleFocusMode, ToggleInspector, ToggleSidebar, ZoomIn, ZoomOut, ZoomPane,
 };
-use gpui_kit::component::kbd::Kbd;
-use gpui_kit::{Action, App, IntoElement, ParentElement as _, RenderOnce, Window, div};
+use gpui_kit::component::{ActiveTheme as _, kbd::Kbd};
+use gpui_kit::{
+    Action, App, InteractiveElement as _, IntoElement, ParentElement as _, RenderOnce, Styled as _,
+    TestSupportExt as _, Window, div,
+};
 use widgets_ui::{SettingsPage, SettingsRow, SettingsSection};
 
 /// Where the review's pane shortcuts are bound.
@@ -41,8 +43,20 @@ fn row(
     })
 }
 
+/// A trackpad gesture and what it does. Gestures are fixed, unlike the key bindings.
+fn gesture(label: &'static str, id: &'static str, gesture: &'static str, cx: &App) -> SettingsRow {
+    SettingsRow::new(label).trailing(
+        div()
+            .id(id)
+            .test_support()
+            .text_sm()
+            .text_color(cx.theme().muted_foreground)
+            .child(gesture),
+    )
+}
+
 impl RenderOnce for KeyboardPage {
-    fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         SettingsPage::new(
             "keyboard-page",
             "Keyboard",
@@ -163,6 +177,27 @@ impl RenderOnce for KeyboardPage {
                 .row(row("Next pane", &FocusNextPane, PANES, window))
                 .row(row("Zoom the pane", &ZoomPane, PANES, window))
                 .row(row("Close the pane", &ClosePane, PANES, window)),
+        )
+        .child(
+            SettingsSection::titled("Trackpad")
+                .row(gesture(
+                    "Make the interface larger or smaller",
+                    "trackpad-pinch",
+                    "Pinch",
+                    cx,
+                ))
+                .row(gesture(
+                    "Open a line of a diff in Zed",
+                    "trackpad-force-click",
+                    "Force click its code",
+                    cx,
+                ))
+                .row(
+                    gesture("Go back", "trackpad-swipe", "Three-finger swipe", cx).description(
+                        "Needs Swipe between pages set to three fingers in System Settings › \
+                         Trackpad › More Gestures. A mouse’s back button does the same.",
+                    ),
+                ),
         )
     }
 }

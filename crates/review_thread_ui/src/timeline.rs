@@ -448,7 +448,13 @@ impl ReviewThreadView {
                 let view = cx.entity();
                 let (menu_view, menu_path) = (view.clone(), path.to_string());
                 let (select_view, select_path) = (view.clone(), path.to_string());
+                let (force_view, force_path) = (view.clone(), path.to_string());
                 element = element
+                    .on_force_click_line(move |line, window, cx| {
+                        force_view.update(cx, |this, cx| {
+                            this.force_click_line(&force_path, line, window, cx)
+                        })
+                    })
                     .on_select_line(move |position, gesture, _, cx| {
                         select_view.update(cx, |this, cx| {
                             this.select_line(&select_path, position, gesture, cx)

@@ -2772,3 +2772,304 @@ fn the_wrap_switch_wraps_long_diff_lines(cx: &mut TestAppContext) {
     })
     .unwrap();
 }
+
+/// Sends `event` as the platform would.
+fn send(window: &mut gpui_kit::Window, event: impl gpui_kit::InputEvent, cx: &mut gpui_kit::App) {
+    window.dispatch_event(event.to_platform_input(), cx);
+}
+
+/// Rests the pointer on `position`, where a trackpad gesture then happens.
+fn point_at(
+    window: &mut gpui_kit::Window,
+    position: gpui_kit::Point<gpui_kit::Pixels>,
+    cx: &mut gpui_kit::App,
+) {
+    send(
+        window,
+        gpui_kit::MouseMoveEvent {
+            position,
+            ..Default::default()
+        },
+        cx,
+    );
+}
+
+/// One pinch gesture over the featured row: it starts, then reports each of `deltas`.
+fn pinch(window: AnyWindowHandle, deltas: &[f32], cx: &mut TestAppContext) {
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let position = window.find("flaticols/switchfold#482").bounds().center();
+        point_at(window, position, cx);
+        let event = |delta, phase| gpui_kit::PinchEvent {
+            position,
+            delta,
+            phase,
+            ..Default::default()
+        };
+        send(window, event(0., gpui_kit::TouchPhase::Started), cx);
+        for delta in deltas {
+            send(window, event(*delta, gpui_kit::TouchPhase::Moved), cx);
+        }
+    })
+    .unwrap();
+    cx.run_until_parked();
+}
+
+fn featured_row_height(window: AnyWindowHandle, cx: &mut TestAppContext) -> gpui_kit::Pixels {
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.find("flaticols/switchfold#482").bounds().size.height
+    })
+    .unwrap()
+}
+
+#[gpui_kit::test]
+fn a_pinch_steps_the_interface_size_with_a_haptic_tick(cx: &mut TestAppContext) {
+    use haptics_ui::Haptic;
+    let (window, _) = open(cx);
+    let played = cx.update(haptics_ui::record);
+    let normal = featured_row_height(window, cx);
+
+    pinch(window, &[0.1], cx);
+    assert_eq!(
+        featured_row_height(window, cx),
+        normal,
+        "a slight pinch leaves the size alone"
+    );
+    assert!(played.borrow().is_empty(), "and plays nothing");
+
+    pinch(window, &[0.15, 0.15], cx);
+    let larger = featured_row_height(window, cx);
+    assert!(
+        larger > normal,
+        "spreading the fingers draws the list larger: {larger:?} after {normal:?}"
+    );
+    assert_eq!(
+        played.borrow().as_slice(),
+        [Haptic::LevelChange],
+        "with one tick for the one size it moved"
+    );
+
+    pinch(window, &[0.3, 0.3, 0.3, 0.3], cx);
+    let largest = featured_row_height(window, cx);
+    assert!(largest > larger, "a longer pinch goes on: {largest:?}");
+    assert_eq!(
+        played.borrow().len(),
+        2,
+        "the largest size is one step further, and pinching past it plays nothing"
+    );
+
+    pinch(window, &[-0.3], cx);
+    assert_eq!(
+        featured_row_height(window, cx),
+        larger,
+        "closing the fingers steps back at once, whatever was pinched past the limit"
+    );
+    assert_eq!(played.borrow().len(), 3);
+}
+
+/// A stand-in for the `zed` launcher that appends its arguments to the returned file.
+fn recording_zed(dir: &std::path::Path) -> (String, std::path::PathBuf) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let script = dir.join("zed");
+    let opened = dir.join("opened");
+    std::fs::write(
+        &script,
+        format!("#!/bin/sh\necho \"$@\" >> '{}'\n", opened.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    (script.to_string_lossy().into_owned(), opened)
+}
+
+/// Presses the code of the line whose gutter is `gutter` through the trackpad's stages:
+/// a click, harder into the force stage and holding there, then letting go.
+fn force_click_code(window: AnyWindowHandle, gutter: &'static str, cx: &mut TestAppContext) {
+    use gpui_kit::{MouseButton, PressureStage};
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let gutter = window.find(gutter).bounds();
+        let position = gpui_kit::point(gutter.right() + px(24.), gutter.center().y);
+        let pressure = |stage, pressure| gpui_kit::MousePressureEvent {
+            position,
+            stage,
+            pressure,
+            ..Default::default()
+        };
+        point_at(window, position, cx);
+        send(
+            window,
+            gpui_kit::MouseDownEvent {
+                position,
+                button: MouseButton::Left,
+                click_count: 1,
+                ..Default::default()
+            },
+            cx,
+        );
+        send(window, pressure(PressureStage::Normal, 0.6), cx);
+        send(window, pressure(PressureStage::Force, 0.1), cx);
+        send(window, pressure(PressureStage::Force, 0.5), cx);
+        send(window, pressure(PressureStage::Force, 0.2), cx);
+        send(window, pressure(PressureStage::Normal, 0.4), cx);
+        send(
+            window,
+            gpui_kit::MouseUpEvent {
+                position,
+                button: MouseButton::Left,
+                click_count: 1,
+                ..Default::default()
+            },
+            cx,
+        );
+    })
+    .unwrap();
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn a_force_click_on_a_line_opens_it_in_zed_once(cx: &mut TestAppContext) {
+    use app_state_ui::StoresExt as _;
+    use gpui_kit::component::WindowExt as _;
+    let dir = std::env::temp_dir().join(format!("switchfold-ui-force-{}", std::process::id()));
+    let clone = clone_with_featured_branch(&dir);
+    let (zed, opened) = recording_zed(&dir);
+    let (window, _) = open_featured(cx);
+    cx.update(|cx| {
+        let settings = cx.stores().settings().clone();
+        settings.update(cx, |settings, cx| {
+            settings.set_repository_path("flaticols/switchfold", clone.clone(), cx);
+            settings.update_preferences(cx, |preferences| {
+                preferences.zed_command = zed;
+                preferences.open_files_at = settings_model::OpenFilesAt::WorkingTree;
+            });
+        });
+    });
+    cx.run_until_parked();
+
+    force_click_code(window, "gutter-137-137", cx);
+    let lines = |opened: &std::path::Path| -> Vec<String> {
+        std::fs::read_to_string(opened)
+            .unwrap_or_default()
+            .lines()
+            // Settings asks a newly set launcher for its version.
+            .filter(|line| *line != "--version")
+            .map(str::to_string)
+            .collect()
+    };
+    let first = lines(&opened);
+    assert_eq!(
+        first.len(),
+        1,
+        "one press opens Zed once, however long it is held: {first:?}"
+    );
+    assert!(
+        first[0].starts_with(&format!("{} {}/", clone.display(), clone.display()))
+            && first[0].ends_with(":137"),
+        "at the pressed line of the file, inside the clone: {first:?}"
+    );
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            !on_screen(window, "selected-137-137"),
+            "the press selects no line"
+        );
+        assert!(!window.has_focused_input(cx), "and starts no comment on it");
+        assert!(on_screen(window, "gutter-137-137"), "the review stays open");
+    })
+    .unwrap();
+
+    force_click_code(window, "gutter-136-136", cx);
+    let second = lines(&opened);
+    assert_eq!(second.len(), 2, "the next press opens again: {second:?}");
+    assert!(second[1].ends_with(":136"), "{second:?}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[gpui_kit::test]
+fn a_swipe_back_leaves_the_review_for_the_list(cx: &mut TestAppContext) {
+    use gpui_kit::{MouseButton, NavigationDirection};
+    let (window, workspace) = open_featured(cx);
+    let swipe = |direction, cx: &mut TestAppContext| {
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            let position = window.bounds().size.center();
+            point_at(window, position, cx);
+            send(
+                window,
+                gpui_kit::MouseDownEvent {
+                    position,
+                    button: MouseButton::Navigate(direction),
+                    click_count: 1,
+                    ..Default::default()
+                },
+                cx,
+            );
+        })
+        .unwrap();
+        cx.run_until_parked();
+    };
+
+    swipe(NavigationDirection::Forward, cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            on_screen(window, "gutter-137-137"),
+            "there is nowhere forward to go: the review stays"
+        );
+    })
+    .unwrap();
+
+    swipe(NavigationDirection::Back, cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window.try_find("gutter-137-137").is_none(),
+            "a swipe back takes the diff off screen"
+        );
+        assert!(
+            on_screen(window, "flaticols/switchfold#482"),
+            "and brings the list back"
+        );
+    })
+    .unwrap();
+    assert_eq!(cx.update(|cx| workspace.read(cx).reviewing(cx)), None);
+}
+
+#[gpui_kit::test]
+fn the_keyboard_page_lists_the_trackpad_gestures(cx: &mut TestAppContext) {
+    let (window, _) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.press("cmd-,", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        // Settings navigation rows are section-group-row; Keyboard is the sixth.
+        window.click("0-0-5", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        // The section is the page's last, below the fold: wheel down to it.
+        let position = window.bounds().size.center();
+        point_at(window, position, cx);
+        send(
+            window,
+            gpui_kit::ScrollWheelEvent {
+                position,
+                delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-2000.))),
+                ..Default::default()
+            },
+            cx,
+        );
+        window.render_frame(cx);
+        for id in ["trackpad-pinch", "trackpad-force-click", "trackpad-swipe"] {
+            assert!(on_screen(window, id), "{id} is on the Keyboard page");
+        }
+    })
+    .unwrap();
+}

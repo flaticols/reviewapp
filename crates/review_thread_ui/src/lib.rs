@@ -40,8 +40,8 @@ use gpui_kit::component::{
 use gpui_kit::{
     App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, KeyBinding, ListAlignment, ListOffset, ListState,
-    ParentElement as _, Pixels, Render, SharedString, Styled as _, Subscription, WeakEntity,
-    Window, div, px,
+    MousePressureEvent, ParentElement as _, Pixels, PressureStage, Render, SharedString,
+    Styled as _, Subscription, WeakEntity, Window, div, px,
 };
 use pr_model::PullRequestKey;
 use review_model::{FindingState, PullRequestDetail, TimelineItem};
@@ -245,6 +245,8 @@ pub struct ReviewThreadView {
     new_thread: Option<(String, u32, Entity<TextareaState>)>,
     /// Lines selected by their numbers, with the question being written about them.
     line_selection: Option<ask::LineSelection>,
+    /// The press in progress already reached the trackpad's force stage and was acted on.
+    force_clicked: bool,
     editing_finding: Option<(String, Entity<TextareaState>)>,
     /// The draft the reviewer focused last, where quotes and references from the diff go.
     last_draft: Option<WeakEntity<TextareaState>>,
@@ -383,6 +385,7 @@ impl ReviewThreadView {
             reply_inputs: HashMap::new(),
             new_thread: None,
             line_selection: None,
+            force_clicked: false,
             editing_finding: None,
             last_draft: None,
             list_state,
@@ -888,6 +891,21 @@ impl ReviewThreadView {
         pr_actions_ui::open_in_zed(&self.key, path.as_deref(), line, window, cx);
     }
 
+    /// Opens `path` at `line` in Zed for a force click, once per press: pressure keeps
+    /// arriving for as long as the finger stays down.
+    pub(crate) fn force_click_line(
+        &mut self,
+        path: &str,
+        line: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if std::mem::replace(&mut self.force_clicked, true) {
+            return;
+        }
+        self.open_in_zed(Some(path.to_string()), Some(line), window, cx);
+    }
+
     /// Opens a comment composer on head-side `line` of `path` and scrolls to it, as when
     /// Zed asks to comment on the line under its cursor. Returns `false` when the line
     /// isn't part of the diff, where GitHub doesn't take comments.
@@ -1118,6 +1136,13 @@ impl Render for ReviewThreadView {
             .track_focus(&self.focus_handle)
             .size_full()
             .bg(cx.theme().background)
+            // Rearmed here rather than on the line: the finger can ease off after the
+            // pointer has left the line it pressed.
+            .on_mouse_pressure(cx.listener(|this, event: &MousePressureEvent, _, _| {
+                if event.stage != PressureStage::Force {
+                    this.force_clicked = false;
+                }
+            }))
             .on_action(cx.listener(|this, _: &GoBack, window, cx| {
                 if this.find_has_focus(window, cx) {
                     this.close_find(window, cx);

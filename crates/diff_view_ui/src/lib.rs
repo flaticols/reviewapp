@@ -24,9 +24,9 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     AnyElement, App, ClickEvent, ClipboardItem, ElementId, Font, FontWeight, HighlightStyle, Hsla,
-    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Pixels, RenderOnce,
-    ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _, TestSupportExt as _,
-    TextRun, Window, div, prelude::FluentBuilder as _, rems,
+    InteractiveElement as _, IntoElement, MouseButton, MousePressureEvent, ParentElement as _,
+    Pixels, PressureStage, RenderOnce, ScrollHandle, SharedString, StatefulInteractiveElement as _,
+    Styled as _, TestSupportExt as _, TextRun, Window, div, prelude::FluentBuilder as _, rems,
 };
 use selectable_code::SelectableCode;
 use syntax_ui::FileHighlights;
@@ -123,6 +123,7 @@ type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 type ViewedHandler = Rc<dyn Fn(&bool, &mut Window, &mut App)>;
 type LineHandler = Rc<dyn Fn(u32, &mut Window, &mut App)>;
 type SelectHandler = Rc<dyn Fn(LinePosition, LineGesture, &mut Window, &mut App)>;
+type PressureListener = Box<dyn Fn(&MousePressureEvent, &mut Window, &mut App)>;
 type MenuBuilder = Rc<dyn Fn(PopupMenu, &mut Window, &mut App) -> PopupMenu>;
 type LineMenuBuilder = Rc<dyn Fn(PopupMenu, &LineMenuTarget, &mut Window, &mut App) -> PopupMenu>;
 type Spans = [(std::ops::Range<usize>, gpui_kit::HighlightStyle)];
@@ -273,6 +274,7 @@ pub struct FileDiffRow {
     on_viewed: Option<ViewedHandler>,
     on_open_in_zed: Option<ClickHandler>,
     on_comment_line: Option<LineHandler>,
+    on_force_click_line: Option<LineHandler>,
     menu: Option<MenuBuilder>,
     line_menu: Option<LineMenuBuilder>,
     on_select_line: Option<SelectHandler>,
@@ -332,6 +334,7 @@ impl FileDiffRow {
             on_viewed: None,
             on_open_in_zed: None,
             on_comment_line: None,
+            on_force_click_line: None,
             menu: None,
             line_menu: None,
             on_select_line: None,
@@ -443,6 +446,17 @@ impl FileDiffRow {
         handler: impl Fn(u32, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_comment_line = Some(Rc::new(handler));
+        self
+    }
+
+    /// Handles a force click on a line's code with the line's number: in the head file,
+    /// or in the base file for a line the change removed. A trackpad reports pressure
+    /// continuously, so the handler runs for every event at the force stage of one press.
+    pub fn on_force_click_line(
+        mut self,
+        handler: impl Fn(u32, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_force_click_line = Some(Rc::new(handler));
         self
     }
 
@@ -580,6 +594,7 @@ impl FileDiffRow {
                 DiffSide::Base => None,
                 DiffSide::Head => self.on_comment_line.clone(),
             },
+            on_force_click: self.on_force_click_line.clone(),
             menu: self.line_menu.clone(),
             long_lines: self.long_lines.clone(),
             document_order: DOCUMENT_ORDER_BASE
@@ -735,7 +750,7 @@ fn hunk_header(header: &str, long_lines: &LongLines, cx: &App) -> impl IntoEleme
         .bg(cx.app_theme().diff_hunk)
         .text_color(cx.theme().muted_foreground)
         .child(div().w(gutter_width()).flex_shrink_0())
-        .child(code_viewport("hunk-code", long_lines, header, cx))
+        .child(code_viewport("hunk-code", long_lines, header, None, cx))
 }
 
 /// The part of a row beside its gutter, holding `content` as `long_lines` says. The
@@ -744,6 +759,7 @@ fn code_viewport(
     id: impl Into<ElementId>,
     long_lines: &LongLines,
     content: impl IntoElement,
+    on_pressure: Option<PressureListener>,
     cx: &App,
 ) -> impl IntoElement {
     let viewport = div()
@@ -751,7 +767,10 @@ fn code_viewport(
         .flex_1()
         .min_w_0()
         .text_code(cx)
-        .line_height(code_line_height(cx));
+        .line_height(code_line_height(cx))
+        .when_some(on_pressure, |this, listener| {
+            this.on_mouse_pressure(listener)
+        });
     let content = div().id(id).test_support().child(content);
     match long_lines {
         LongLines::Clip => viewport
@@ -819,14 +838,20 @@ fn number_cell(number: Option<u32>, cx: &App) -> impl IntoElement {
 
 fn code_cell(
     id: String,
-    text: &str,
+    line: &DiffLine,
     spans: &Spans,
     actions: &LineActions,
     cx: &App,
 ) -> impl IntoElement {
-    let (text, spans) = expand_tabs(text, spans);
+    let (text, spans) = expand_tabs(&line.text, spans);
     let code = SelectableCode::new("code", text, spans).document_order(actions.document_order);
-    code_viewport(SharedString::from(id), &actions.long_lines, code, cx)
+    code_viewport(
+        SharedString::from(id),
+        &actions.long_lines,
+        code,
+        actions.force_click(line),
+        cx,
+    )
 }
 
 /// A line's row: one line of code tall, or as tall as its wrapped code. The gutter and
@@ -852,6 +877,7 @@ struct LineActions {
     selected: bool,
     on_select: Option<SelectHandler>,
     on_comment_line: Option<LineHandler>,
+    on_force_click: Option<LineHandler>,
     menu: Option<LineMenuBuilder>,
     long_lines: LongLines,
     document_order: u64,
@@ -872,6 +898,17 @@ impl LineActions {
                 select(position, gesture, window, cx)
             },
         )
+    }
+
+    /// Reports a press on `line`'s code that reached the trackpad's force stage.
+    fn force_click(&self, line: &DiffLine) -> Option<PressureListener> {
+        let handler = self.on_force_click.clone()?;
+        let number = line.new_line.or(line.old_line)?;
+        Some(Box::new(move |event, window, cx| {
+            if event.stage == PressureStage::Force {
+                handler(number, window, cx)
+            }
+        }))
     }
 
     /// Reports the pointer crossing the line with the button held.
@@ -1011,7 +1048,7 @@ fn unified_line(
         )
         .child(code_cell(
             format!("code-{numbers}"),
-            &line.text,
+            line,
             spans,
             &actions,
             cx,
@@ -1096,7 +1133,7 @@ fn split_side(
         )
         .child(code_cell(
             format!("code-{numbers}"),
-            &line.text,
+            line,
             spans,
             &actions,
             cx,
