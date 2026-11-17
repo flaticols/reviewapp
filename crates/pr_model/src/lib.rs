@@ -78,6 +78,12 @@ impl PullRequestKey {
     pub fn id(&self) -> String {
         format!("{}#{}", self.repo, self.number)
     }
+
+    /// Parses `owner/name#number`, as [`Self::id`] writes it.
+    pub fn parse(id: &str) -> Option<Self> {
+        let (repo, number) = id.rsplit_once('#')?;
+        Some(Self::new(RepoSlug::parse(repo)?, number.parse().ok()?))
+    }
 }
 
 /// Lifecycle state of a pull request.
@@ -531,6 +537,17 @@ mod tests {
             MergeQueueState::from_graphql("SOMETHING_NEW"),
             MergeQueueState::Queued
         );
+    }
+
+    #[test]
+    fn key_round_trips_through_id() {
+        let key = PullRequestKey::new(RepoSlug::new("acme", "app"), 42);
+        assert_eq!(PullRequestKey::parse(&key.id()), Some(key));
+    }
+
+    #[test]
+    fn key_without_number_does_not_parse() {
+        assert_eq!(PullRequestKey::parse("acme/app"), None);
     }
 
     #[test]
