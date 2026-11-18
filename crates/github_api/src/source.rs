@@ -183,6 +183,8 @@ pub struct FixtureSource {
     merge_statuses: Mutex<HashMap<PullRequestKey, MergeStatus>>,
     /// Makes [`PullRequestSource::merge_statuses`] fail, as when GitHub is unreachable.
     fail_merge_statuses: AtomicBool,
+    /// Makes rebase updates fail, as when a branch's commits don't replay onto the base.
+    fail_rebases: AtomicBool,
 }
 
 impl FixtureSource {
@@ -199,7 +201,13 @@ impl FixtureSource {
             actions: Mutex::new(Vec::new()),
             merge_statuses: Mutex::new(HashMap::new()),
             fail_merge_statuses: AtomicBool::new(false),
+            fail_rebases: AtomicBool::new(false),
         }
+    }
+
+    /// Makes rebase updates fail while `fail` is set.
+    pub fn fail_rebases(&self, fail: bool) {
+        self.fail_rebases.store(fail, Ordering::Relaxed);
     }
 
     /// Makes merge status requests fail while `fail` is set.
@@ -360,7 +368,11 @@ impl PullRequestSource for FixtureSource {
         self.record(format!(
             "update-branch {node_id} {}",
             if rebase { "rebase" } else { "merge" }
-        ))
+        ))?;
+        if rebase && self.fail_rebases.load(Ordering::Relaxed) {
+            return Err(ApiError::new("rebase conflict between base and head"));
+        }
+        Ok(())
     }
 
     fn merge_statuses(&self, keys: &[PullRequestKey]) -> Result<Vec<MergeStatus>, ApiError> {

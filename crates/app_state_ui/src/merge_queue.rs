@@ -324,12 +324,16 @@ impl MergeQueue {
 }
 
 /// Asks GitHub to carry out `action`. Merges keep GitHub's default commit title and
-/// message.
+/// message. A branch whose commits don't rebase cleanly, such as one with merge commits
+/// from its base, is updated with a merge instead; both pin `head_sha`, so the fallback
+/// never lands on a branch that moved.
 fn run(source: &dyn PullRequestSource, action: &Action) -> Result<(), ApiError> {
     match action {
         Action::Rebase {
             node_id, head_sha, ..
-        } => source.update_branch(node_id, head_sha, true),
+        } => source
+            .update_branch(node_id, head_sha, true)
+            .or_else(|_| source.update_branch(node_id, head_sha, false)),
         Action::Merge {
             key,
             method,
