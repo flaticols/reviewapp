@@ -124,6 +124,14 @@ impl Workspace {
         let settings = cx.stores().settings().clone();
         let observed = vec![
             cx.observe(&pull_requests, |_, _, cx| cx.notify()),
+            cx.observe_window_activation(window, |_, window, cx| {
+                if window.is_window_active() {
+                    cx.stores()
+                        .pull_requests()
+                        .clone()
+                        .update(cx, |store, cx| store.refresh_if_stale(cx));
+                }
+            }),
             cx.observe_in(&settings, window, |this, settings, window, cx| {
                 let signed_out = settings.read(cx).accounts().is_empty();
                 match (&this.route, signed_out) {

@@ -173,7 +173,7 @@ struct CheckProgression {
 /// Serves the sample workspace from memory. Submissions are recorded, not posted, and
 /// running checks can be scripted to finish after a delay.
 pub struct FixtureSource {
-    pull_requests: Vec<PullRequest>,
+    pull_requests: Mutex<Vec<PullRequest>>,
     details: HashMap<PullRequestKey, PullRequestDetail>,
     submitted: Mutex<Vec<(PullRequestKey, ReviewSubmission)>>,
     progressions: Mutex<Vec<CheckProgression>>,
@@ -183,13 +183,15 @@ pub struct FixtureSource {
     merge_statuses: Mutex<HashMap<PullRequestKey, MergeStatus>>,
     /// Makes [`PullRequestSource::merge_statuses`] fail, as when GitHub is unreachable.
     fail_merge_statuses: AtomicBool,
+    /// Makes rebase updates fail, as when a branch's commits don't replay onto the base.
+    fail_rebases: AtomicBool,
 }
 
 impl FixtureSource {
     /// A source serving `pull_requests` and their `details`.
     pub fn new(pull_requests: Vec<PullRequest>, details: Vec<PullRequestDetail>) -> Self {
         Self {
-            pull_requests,
+            pull_requests: Mutex::new(pull_requests),
             details: details
                 .into_iter()
                 .map(|detail| (detail.summary.key.clone(), detail))
@@ -199,6 +201,19 @@ impl FixtureSource {
             actions: Mutex::new(Vec::new()),
             merge_statuses: Mutex::new(HashMap::new()),
             fail_merge_statuses: AtomicBool::new(false),
+            fail_rebases: AtomicBool::new(false),
+        }
+    }
+
+    /// Makes rebase updates fail while `fail` is set.
+    pub fn fail_rebases(&self, fail: bool) {
+        self.fail_rebases.store(fail, Ordering::Relaxed);
+    }
+
+    /// Serves `pull_requests` as the list from now on, as when GitHub's answer changes.
+    pub fn set_pull_requests(&self, pull_requests: Vec<PullRequest>) {
+        if let Ok(mut served) = self.pull_requests.lock() {
+            *served = pull_requests;
         }
     }
 
@@ -272,7 +287,10 @@ impl FixtureSource {
 
 impl PullRequestSource for FixtureSource {
     fn pull_requests(&self) -> Result<Vec<PullRequest>, ApiError> {
-        Ok(self.pull_requests.clone())
+        self.pull_requests
+            .lock()
+            .map(|pull_requests| pull_requests.clone())
+            .map_err(|_| ApiError::new("Couldn’t read the pull requests."))
     }
 
     fn detail(&self, key: &PullRequestKey) -> Result<PullRequestDetail, ApiError> {
@@ -360,7 +378,11 @@ impl PullRequestSource for FixtureSource {
         self.record(format!(
             "update-branch {node_id} {}",
             if rebase { "rebase" } else { "merge" }
-        ))
+        ))?;
+        if rebase && self.fail_rebases.load(Ordering::Relaxed) {
+            return Err(ApiError::new("rebase conflict between base and head"));
+        }
+        Ok(())
     }
 
     fn merge_statuses(&self, keys: &[PullRequestKey]) -> Result<Vec<MergeStatus>, ApiError> {

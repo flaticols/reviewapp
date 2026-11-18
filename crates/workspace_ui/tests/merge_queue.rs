@@ -109,6 +109,29 @@ fn behind_head_is_rebased(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn branch_that_cant_rebase_is_updated_with_a_merge(cx: &mut TestAppContext) {
+    let harness = Harness::new(&[1], vec![status(1, MergeState::Behind)], cx);
+    harness.source.fail_rebases(true);
+    harness.tick(cx);
+    assert_eq!(
+        harness.source.actions(),
+        ["update-branch N1 rebase", "update-branch N1 merge"]
+    );
+}
+
+#[gpui_kit::test]
+fn branch_updated_with_a_merge_waits_for_github(cx: &mut TestAppContext) {
+    let harness = Harness::new(&[1], vec![status(1, MergeState::Behind)], cx);
+    harness.source.fail_rebases(true);
+    harness.tick(cx);
+    harness.tick(cx);
+    assert_eq!(
+        harness.row(1, cx),
+        RowState::Active(Activity::WaitingForGitHub)
+    );
+}
+
+#[gpui_kit::test]
 fn merged_head_leaves_the_queue_and_the_next_is_merged(cx: &mut TestAppContext) {
     let mut merged = status(1, MergeState::Unknown);
     merged.state = PullRequestState::Merged;
