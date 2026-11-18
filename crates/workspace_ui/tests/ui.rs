@@ -1632,6 +1632,36 @@ fn merge_queue(cx: &mut TestAppContext) -> Vec<String> {
 }
 
 #[gpui_kit::test]
+fn dragging_across_the_title_bar_filter_selects_text_instead_of_moving_the_window(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::point;
+    let (window, _) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.click("filter-edit-menu", cx);
+        window.input("switchfold", cx);
+        let field = window.find("filter-edit-menu").bounds();
+        // The test window panics if anything asks it to move, as the title bar does
+        // when a press it owns turns into a drag.
+        // From the empty space after the text to before its first letter.
+        window.drag(
+            field.center(),
+            point(field.left() + px(4.), field.center().y),
+            cx,
+        );
+        window.press("backspace", cx);
+        assert!(
+            window
+                .within("filter-edit-menu")
+                .try_find("clean")
+                .is_none(),
+            "the drag selected all the filter text, so backspace emptied the field"
+        );
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
 fn merge_queue_menu_adds_and_removes(cx: &mut TestAppContext) {
     let (window, _) = open(cx);
     let row = "flaticols/switchfold#482";

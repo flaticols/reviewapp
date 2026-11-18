@@ -8,9 +8,9 @@ use gpui_kit::component::{
     h_flex,
 };
 use gpui_kit::{
-    AnyElement, App, ClickEvent, IntoElement, ParentElement as _, RenderOnce, SharedString,
-    Styled as _, TitlebarOptions, Window, WindowOptions, div, prelude::FluentBuilder as _, px,
-    size,
+    AnyElement, App, ClickEvent, InteractiveElement as _, IntoElement, MouseButton,
+    ParentElement as _, RenderOnce, SharedString, Styled as _, TitlebarOptions, Window,
+    WindowOptions, div, prelude::FluentBuilder as _, px, size,
 };
 use theme_ui::TypographyExt as _;
 use widgets_ui::InitialsAvatar;
@@ -170,7 +170,15 @@ impl RenderOnce for AppTitleBar {
             .justify_end()
             .gap_2()
             .pr_3()
-            .when_some(self.actions, |this, actions| this.child(actions))
+            // Presses on the actions stay theirs: otherwise TitleBar sees them too, so a
+            // double click in the filter zooms the window and a drag across it moves it.
+            .when_some(self.actions, |this, actions| {
+                this.child(
+                    div()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(actions),
+                )
+            })
             .when(self.show_account, |this| {
                 this.child(
                     Button::new("notifications")
