@@ -173,7 +173,7 @@ struct CheckProgression {
 /// Serves the sample workspace from memory. Submissions are recorded, not posted, and
 /// running checks can be scripted to finish after a delay.
 pub struct FixtureSource {
-    pull_requests: Vec<PullRequest>,
+    pull_requests: Mutex<Vec<PullRequest>>,
     details: HashMap<PullRequestKey, PullRequestDetail>,
     submitted: Mutex<Vec<(PullRequestKey, ReviewSubmission)>>,
     progressions: Mutex<Vec<CheckProgression>>,
@@ -191,7 +191,7 @@ impl FixtureSource {
     /// A source serving `pull_requests` and their `details`.
     pub fn new(pull_requests: Vec<PullRequest>, details: Vec<PullRequestDetail>) -> Self {
         Self {
-            pull_requests,
+            pull_requests: Mutex::new(pull_requests),
             details: details
                 .into_iter()
                 .map(|detail| (detail.summary.key.clone(), detail))
@@ -208,6 +208,13 @@ impl FixtureSource {
     /// Makes rebase updates fail while `fail` is set.
     pub fn fail_rebases(&self, fail: bool) {
         self.fail_rebases.store(fail, Ordering::Relaxed);
+    }
+
+    /// Serves `pull_requests` as the list from now on, as when GitHub's answer changes.
+    pub fn set_pull_requests(&self, pull_requests: Vec<PullRequest>) {
+        if let Ok(mut served) = self.pull_requests.lock() {
+            *served = pull_requests;
+        }
     }
 
     /// Makes merge status requests fail while `fail` is set.
@@ -280,7 +287,10 @@ impl FixtureSource {
 
 impl PullRequestSource for FixtureSource {
     fn pull_requests(&self) -> Result<Vec<PullRequest>, ApiError> {
-        Ok(self.pull_requests.clone())
+        self.pull_requests
+            .lock()
+            .map(|pull_requests| pull_requests.clone())
+            .map_err(|_| ApiError::new("Couldn’t read the pull requests."))
     }
 
     fn detail(&self, key: &PullRequestKey) -> Result<PullRequestDetail, ApiError> {

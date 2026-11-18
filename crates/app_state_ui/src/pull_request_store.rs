@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use pr_cache::PullRequestCache;
 
@@ -20,6 +20,11 @@ use review_model::{
 const CHECK_POLL: Duration = Duration::from_secs(5);
 /// How often relative ages are refreshed.
 const CLOCK_TICK: Duration = Duration::from_secs(30);
+/// How often the list syncs on its own.
+const LIST_SYNC: Duration = Duration::from_secs(5 * 60);
+/// The least time between a sync and one asked for by coming back to the window. One
+/// sync runs several GitHub searches, which GitHub rate-limits tightly.
+const MIN_SYNC_GAP: Duration = Duration::from_secs(60);
 /// How long edits to one pull request settle before they are written to the cache.
 const SAVE_DELAY: Duration = Duration::from_millis(750);
 /// Review data not opened for this long is deleted from the cache.
@@ -63,6 +68,8 @@ pub struct PullRequestStore {
     saved_filters: Vec<SavedFilter>,
     now: Timestamp,
     last_synced: Option<Timestamp>,
+    /// When the last sync started, on the executor's clock, which tests can advance.
+    sync_started: Option<Instant>,
     next_comment_id: u64,
     /// Keeps ids of comments made this run apart from cached ones from earlier runs.
     session: i64,
@@ -79,6 +86,7 @@ pub struct PullRequestStore {
     log_requests: HashSet<(PullRequestKey, String)>,
     _clock: Task<()>,
     _check_poll: Task<()>,
+    _list_sync: Task<()>,
 }
 
 impl EventEmitter<PullRequestStoreEvent> for PullRequestStore {}
@@ -114,6 +122,14 @@ impl PullRequestStore {
                 }
             }
         });
+        let list_sync = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(LIST_SYNC).await;
+                if this.update(cx, |this, cx| this.refresh(cx)).is_err() {
+                    break;
+                }
+            }
+        });
         let cache = cache.map(Arc::new);
         // The list is small enough to read before the first frame, which saves a flash of
         // the loading state on every launch.
@@ -126,6 +142,7 @@ impl PullRequestStore {
                 ListState::Loading
             },
             last_synced: cached.as_ref().map(|cached| cached.saved_at),
+            sync_started: None,
             pull_requests: cached.map(|cached| cached.data).unwrap_or_default(),
             details: HashMap::new(),
             saved_filters,
@@ -140,6 +157,7 @@ impl PullRequestStore {
             log_requests: HashSet::new(),
             _clock: clock,
             _check_poll: check_poll,
+            _list_sync: list_sync,
         };
         store.refresh(cx);
         store
@@ -147,6 +165,7 @@ impl PullRequestStore {
 
     /// Reloads the list. Previously loaded pull requests stay visible meanwhile.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.sync_started = Some(cx.background_executor().now());
         if self.pull_requests.is_empty() {
             self.list = ListState::Loading;
         }
@@ -174,6 +193,18 @@ impl PullRequestStore {
             .ok();
         })
         .detach();
+    }
+
+    /// Reloads the list unless a sync started less than a minute ago, for when the
+    /// viewer comes back to the window.
+    pub fn refresh_if_stale(&mut self, cx: &mut Context<Self>) {
+        let now = cx.background_executor().now();
+        if self
+            .sync_started
+            .is_none_or(|started| now.duration_since(started) >= MIN_SYNC_GAP)
+        {
+            self.refresh(cx);
+        }
     }
 
     /// Whether the list has loaded.
